@@ -55,7 +55,7 @@ function Install-Git {
         else {
             Write-Log "winget not found. Falling back to direct download..."
             $installer = Join-Path $env:TEMP 'Git-installer.exe'
-            Invoke-WebRequest -Uri $ToolConfig.fallbackUrl -OutFile $installer -UseBasicParsing
+            Invoke-WebRequest -Uri $ToolConfig.fallbackUrl -OutFile $installer -UseBasicParsing -TimeoutSec 120
             Write-Log "Running Git installer..."
             Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-' -Wait
             Update-Path
@@ -127,7 +127,7 @@ function Install-AnyDesk {
         else {
             $installer = Join-Path $env:TEMP 'AnyDesk.exe'
             Write-Log "Downloading AnyDesk from $($ToolConfig.downloadUrl)..."
-            Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $installer -UseBasicParsing
+            Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $installer -UseBasicParsing -TimeoutSec 120
 
             $installDir = $ToolConfig.installDir
             $args = @(
@@ -137,8 +137,11 @@ function Install-AnyDesk {
                 '--silent'
             )
             Write-Log 'Installing AnyDesk silently...'
-            Start-Process -FilePath $installer -ArgumentList ($args -join ' ') -Wait
-            Start-Sleep -Seconds 10
+            $proc = Start-Process -FilePath $installer -ArgumentList ($args -join ' ') -PassThru
+            if (-not $proc.WaitForExit(120000)) {
+                Write-Log 'AnyDesk installer did not exit within 2 minutes; continuing.' -Level Warn
+            }
+            Start-Sleep -Seconds 5
         }
 
         if (-not (Test-Path $binary)) {
@@ -176,23 +179,28 @@ function Install-Antigravity {
 
         Write-Log "Downloading Antigravity IDE from $($ToolConfig.downloadUrl)..."
         $installer = Join-Path $env:TEMP 'Antigravity-IDE-Installer.exe'
-        Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $installer -UseBasicParsing
-        
-        Write-Log "Installing Antigravity IDE silently..."
-        # Using common silent flags for Windows installers
-        Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' -Wait
-        Start-Sleep -Seconds 5
-        Update-Path
+        Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $installer -UseBasicParsing -TimeoutSec 120
+        if (-not (Test-Path $installer)) {
+            throw 'Antigravity installer download produced no file.'
+        }
+
+        Write-Log "Installing Antigravity IDE silently (non-blocking)..."
+        # Never block the workflow: launch the installer and only wait briefly for the binary.
+        Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' | Out-Null
+        $deadline = (Get-Date).AddMinutes(3)
+        while (-not (Test-Path $binary) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 10
+        }
 
         if (Test-Path $binary) {
             Write-Log "Antigravity IDE installed successfully at $binary"
         }
         else {
-            Write-Log "Antigravity IDE installation finished, but binary not found at $binary. It may still be installing in the background." -Level Warn
+            Write-Log 'Antigravity install still running in the background; continuing without waiting.' -Level Warn
         }
     }
     catch {
-        Write-Log "Antigravity IDE install failed: $_" -Level Warn
+        Write-Log "Antigravity install failed: $_" -Level Warn
     }
 }
 
@@ -213,10 +221,13 @@ try {
     Install-Antigravity -ToolConfig $config.tools.antigravity
 
     Write-Log 'setup-tools.ps1 completed successfully.'
-    # Explicitly exit with 0 to ensure GitHub Actions reports success
+    # Explicitly reset and exit with 0 so GitHub Actions reports success
+    # (the runner propagates $LASTEXITCODE when pwsh wraps the step).
+    $LASTEXITCODE = 0
     exit 0
 }
 catch {
     Write-Log "setup-tools.ps1 fatal error: $_" -Level Error
+    $LASTEXITCODE = 1
     exit 1
 }

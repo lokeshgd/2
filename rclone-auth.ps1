@@ -37,7 +37,7 @@ function Ensure-Rclone {
     Write-Log 'Installing rclone...'
     New-Item -ItemType Directory -Path $ToolConfig.installDir -Force | Out-Null
     $zipPath = Join-Path $env:TEMP 'rclone.zip'
-    Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $zipPath -UseBasicParsing
+    Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
     Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
 
     $extracted = Get-ChildItem -Path $env:TEMP -Directory -Filter 'rclone-*-windows-amd64' | Select-Object -First 1
@@ -52,19 +52,18 @@ function Ensure-Rclone {
 }
 
 function Write-PCloudOAuthInstructions {
-    param([string]$RcloneExe)
-    Write-Log 'PCLOUD_CONFIG secret is missing — generating OAuth link.'
-    
-    $authOutput = & $RcloneExe authorize 'pcloud' 2>&1 | Out-String
-    Write-Host $authOutput
+    Write-Log 'PCLOUD_CONFIG secret is missing — generating OAuth instructions.'
+    Write-Log 'Skip pCloud mount for this run (non-fatal).' -Level Warn
 
     if ($env:GITHUB_STEP_SUMMARY) {
         @"
-### pCloud OAuth Required
-The `PCLOUD_CONFIG` secret is not set. Run the following command locally to generate a config block, then add it to your GitHub repository secrets as **PCLOUD_CONFIG**.
+### pCloud Not Configured
+The `PCLOUD_CONFIG` secret is not set, so the pCloud drive was not mounted and persistent file sync was skipped for this run.
+Run the following on a machine with a browser to generate an rclone pcloud config block, then add it as the **PCLOUD_CONFIG** repository secret:
 
 ``````text
-$authOutput
+rclone config create pcloud pcloud
+rclone authorize pcloud
 ``````
 "@ | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
     }
@@ -139,24 +138,30 @@ function Mount-PCloudDrive {
 try {
     Write-Log 'rclone-auth.ps1 starting...'
     $config = Get-Config
+    $pcloudConfig = $env:PCLOUD_CONFIG
+
+    if ([string]::IsNullOrWhiteSpace($pcloudConfig)) {
+        Write-PCloudOAuthInstructions
+        # Do NOT run 'rclone authorize' here: it blocks indefinitely on a
+        # headless runner. Exit cleanly so the workflow continues.
+        $LASTEXITCODE = 0
+        exit 0
+    }
+
     $rcloneExe = Ensure-Rclone -ToolConfig $config.tools.rclone
 
     $configDir = Expand-ConfigPath $config.rcloneConfigDir
     $configFile = Expand-ConfigPath $config.rcloneConfigFile
-    $pcloudConfig = $env:PCLOUD_CONFIG
-
-    if ([string]::IsNullOrWhiteSpace($pcloudConfig)) {
-        Write-PCloudOAuthInstructions -RcloneExe $rcloneExe
-        Write-Log 'OAuth instructions generated. Please configure PCLOUD_CONFIG secret.' -Level Warn
-        exit 0
-    }
 
     Install-PCloudConfig -ConfigContent $pcloudConfig -ConfigDir $configDir -ConfigFile $configFile
     Mount-PCloudDrive -RcloneExe $rcloneExe -Remote $config.pcloudRemote -DriveLetter $config.backupDrive
 
     Write-Log 'rclone-auth.ps1 completed successfully.'
+    $LASTEXITCODE = 0
+    exit 0
 }
 catch {
     Write-Log "rclone-auth.ps1 fatal error: $_" -Level Error
+    $LASTEXITCODE = 1
     exit 1
 }

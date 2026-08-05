@@ -233,8 +233,11 @@ try {
     }
 
     Write-Log "persistent-state.ps1 completed successfully (Action=$Action)."
+    $LASTEXITCODE = 0
+    exit 0
 }
 catch {
     Write-Log "persistent-state.ps1 fatal error: $_" -Level Error
+    $LASTEXITCODE = 1
     exit 1
 }
