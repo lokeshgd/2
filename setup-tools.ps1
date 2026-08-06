@@ -148,19 +148,43 @@ function Install-AnyDesk {
             throw "AnyDesk binary not found at $binary after installation."
         }
 
+        # AnyDesk needs its service/process running before --set-password and --get-id work.
+        try {
+            $svc = Get-Service -Name 'AnyDesk' -ErrorAction SilentlyContinue
+            if ($svc) {
+                Start-Service -Name 'AnyDesk' -ErrorAction SilentlyContinue
+            }
+        }
+        catch {
+            Write-Log "AnyDesk service start failed: $_" -Level Warn
+        }
+
         if ($Password) {
             Write-Log "Configuring AnyDesk unattended access for user: $($AnyConfig.user)..."
             $Password | & $binary --set-password 2>&1 | Out-Null
-            Start-Sleep -Seconds 2
+            Start-Sleep -Seconds 3
         }
 
-        $anydeskId = & $binary --get-id 2>$null
+        # Retrieve the AnyDesk ID (start the process and retry if needed).
+        $anydeskId = ''
+        for ($i = 1; $i -le 6; $i++) {
+            $anydeskId = & $binary --get-id 2>$null
+            if ($anydeskId) { break }
+            if (-not (Get-Process -Name 'AnyDesk' -ErrorAction SilentlyContinue)) {
+                Start-Process -FilePath $binary | Out-Null
+            }
+            Start-Sleep -Seconds 3
+        }
+
         if ($anydeskId) {
             $anydeskId = $anydeskId.Trim()
             Write-Log "AnyDesk ID: $anydeskId"
             if ($env:GITHUB_STEP_SUMMARY) {
                 "### AnyDesk`n- **ID**: ``$anydeskId```n- **User**: ``$($AnyConfig.user)``" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
             }
+        }
+        else {
+            Write-Log 'AnyDesk installed but the AnyDesk ID could not be retrieved.' -Level Warn
         }
     }
     catch {
