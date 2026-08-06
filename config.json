@@ -35,7 +35,10 @@
         },
         "rclone": {
             "installDir": "C:\\rclone",
-            "downloadUrl": "https://downloads.rclone.org/v1.68.2/rclone-v1.68.2-windows-amd64.zip"
+            "downloadUrl": "https://downloads.rclone.org/v1.75.0/rclone-v1.75.0-windows-amd64.zip"
+        },
+        "winfsp": {
+            "downloadUrl": "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
         }
     },
     "syncPaths": {

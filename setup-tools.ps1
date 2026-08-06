@@ -168,6 +168,35 @@ function Install-AnyDesk {
     }
 }
 
+function Install-WinFsp {
+    param($ToolConfig)
+    try {
+        if (Get-Service -Name 'WinFsp.Launcher' -ErrorAction SilentlyContinue) {
+            Write-Log 'WinFsp already installed.'
+            return
+        }
+        Write-Log "Downloading WinFsp from $($ToolConfig.downloadUrl)..."
+        $installer = Join-Path $env:TEMP 'winfsp.msi'
+        Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $installer -UseBasicParsing -TimeoutSec 120
+        Write-Log 'Installing WinFsp silently (required for rclone mount)...'
+        $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i', "`"$installer`"", '/qn', '/norestart' -PassThru
+        if (-not $proc.WaitForExit(180000)) {
+            Write-Log 'WinFsp installer did not exit within 3 minutes.' -Level Warn
+        }
+        Start-Sleep -Seconds 5
+        if (Get-Service -Name 'WinFsp.Launcher' -ErrorAction SilentlyContinue) {
+            Start-Service 'WinFsp.Launcher' -ErrorAction SilentlyContinue
+            Write-Log 'WinFsp installed successfully.'
+        }
+        else {
+            Write-Log 'WinFsp installation finished but service not detected.' -Level Warn
+        }
+    }
+    catch {
+        Write-Log "WinFsp install failed: $_" -Level Warn
+    }
+}
+
 function Install-Antigravity {
     param($ToolConfig)
     try {
@@ -215,6 +244,7 @@ try {
 
     Install-Git -ToolConfig $config.tools.git
     Install-Node -ToolConfig $config.tools.node
+    Install-WinFsp -ToolConfig $config.tools.winfsp
     Install-AnyDesk -ToolConfig $config.tools.anydesk -AnyConfig $config.anydesk -Password $password
     Install-NpmGlobal -PackageName $config.tools.claudeCode.npmPackage
     Install-NpmGlobal -PackageName $config.tools.openCode.npmPackage
