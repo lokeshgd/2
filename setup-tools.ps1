@@ -149,14 +149,32 @@ function Install-AnyDesk {
         }
 
         # AnyDesk needs its service/process running before --set-password and --get-id work.
-        try {
-            $svc = Get-Service -Name 'AnyDesk' -ErrorAction SilentlyContinue
-            if ($svc) {
-                Start-Service -Name 'AnyDesk' -ErrorAction SilentlyContinue
+        # Start the service and wait until it reports Running (the daemon is what answers --get-id).
+        $svc = Get-Service -Name 'AnyDesk' -ErrorAction SilentlyContinue
+        if ($svc) {
+            try {
+                Write-Log "Starting AnyDesk service (current status: $($svc.Status))..."
+                Start-Service -Name 'AnyDesk' -ErrorAction Stop
             }
+            catch {
+                Write-Log "Start-Service failed ($_), retrying via sc.exe..." -Level Warn
+                sc.exe start AnyDesk 2>&1 | Out-Null
+            }
+            $deadline = (Get-Date).AddSeconds(60)
+            while ((Get-Service -Name 'AnyDesk' -ErrorAction SilentlyContinue).Status -ne 'Running' -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds 3
+            }
+            $svc = Get-Service -Name 'AnyDesk' -ErrorAction SilentlyContinue
+            Write-Log "AnyDesk service status now: $($svc.Status)"
         }
-        catch {
-            Write-Log "AnyDesk service start failed: $_" -Level Warn
+        else {
+            Write-Log 'AnyDesk service not registered; relying on the GUI process instead.' -Level Warn
+        }
+
+        # Ensure a running AnyDesk process exists (the daemon responds to --get-id).
+        if (-not (Get-Process -Name 'AnyDesk' -ErrorAction SilentlyContinue)) {
+            Start-Process -FilePath $binary | Out-Null
+            Start-Sleep -Seconds 5
         }
 
         if ($Password) {
@@ -165,15 +183,17 @@ function Install-AnyDesk {
             Start-Sleep -Seconds 3
         }
 
-        # Retrieve the AnyDesk ID (start the process and retry if needed).
+        # Retrieve the AnyDesk ID (longer retry window; a fresh VM can be slow to generate its ID).
         $anydeskId = ''
-        for ($i = 1; $i -le 6; $i++) {
-            $anydeskId = & $binary --get-id 2>$null
-            if ($anydeskId) { break }
+        for ($i = 1; $i -le 12; $i++) {
+            $raw = (& $binary --get-id 2>$null) | Out-String
+            $anydeskId = ($raw.Trim() -split '\s+')[0]
+            if ($anydeskId -match '^\d{6,12}$') { break }
+            $anydeskId = ''
             if (-not (Get-Process -Name 'AnyDesk' -ErrorAction SilentlyContinue)) {
                 Start-Process -FilePath $binary | Out-Null
             }
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 5
         }
 
         if ($anydeskId) {
@@ -184,7 +204,8 @@ function Install-AnyDesk {
             }
         }
         else {
-            Write-Log 'AnyDesk installed but the AnyDesk ID could not be retrieved.' -Level Warn
+            Write-Log "AnyDesk installed but the AnyDesk ID could not be retrieved after 12 attempts." -Level Warn
+            Write-Log "AnyDesk --get-id raw output: [$raw]" -Level Warn
         }
     }
     catch {
