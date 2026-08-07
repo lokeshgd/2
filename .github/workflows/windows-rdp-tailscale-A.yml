@@ -166,11 +166,16 @@ jobs:
 
           "### RDP (A)`nHost: $env:TS_HOSTNAME`nIPv4: $ip4`nMagicDNS: $fqdn`nDERP: $derp`nUser: $env:RDP_USER`nPass: $env:RDP_PASS" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
+      - name: Optimize performance (High priority RDP/Tailscale/AnyDesk)
+        run: ./optimize.ps1
+
       - name: Keep alive
         run: |
           $mins=[int]"${{ steps.cfg.outputs.runtime }}"
           $end=(Get-Date).AddMinutes($mins)
           while((Get-Date) -lt $end){
+            # Re-apply high priority in case a process restarted mid-session.
+            try { & .\optimize.ps1 *> $null } catch {}
             $left=[int]([math]::Ceiling(($end-(Get-Date)).TotalMinutes))
             Write-Host "RDP alive... ($left min left)"
             Start-Sleep -Seconds 60

@@ -94,7 +94,8 @@ function Mount-PCloudDrive {
     param(
         [string]$RcloneExe,
         [string]$Remote,
-        [string]$DriveLetter
+        [string]$DriveLetter,
+        $MountSettings
     )
 
     $driveName = $DriveLetter.TrimEnd(':')
@@ -106,10 +107,12 @@ function Mount-PCloudDrive {
     Write-Log "Mounting $Remote to $DriveLetter..."
     $mountArgs = @(
         'mount', $Remote, $DriveLetter,
-        '--vfs-cache-mode', 'full',
-        '--vfs-cache-max-size', '2G',
-        '--dir-cache-time', '72h',
-        '--poll-interval', '15s',
+        '--vfs-cache-mode', $MountSettings.vfsCacheMode,
+        '--vfs-cache-max-size', $MountSettings.vfsCacheMaxSize,
+        '--vfs-write-back', $MountSettings.vfsWriteBack,
+        '--dir-cache-time', $MountSettings.dirCacheTime,
+        '--poll-interval', $MountSettings.pollInterval,
+        '--buffer-size', $MountSettings.bufferSize,
         '--no-console'
     )
 
@@ -153,8 +156,21 @@ try {
     $configDir = Expand-ConfigPath $config.rcloneConfigDir
     $configFile = Expand-ConfigPath $config.rcloneConfigFile
 
+    # Mount tuning from config.performance.rclone (falls back to sane defaults).
+    $mountSettings = $config.performance.rclone
+    if (-not $mountSettings) {
+        $mountSettings = @{
+            vfsCacheMode    = 'writes'
+            vfsCacheMaxSize = '2G'
+            vfsWriteBack    = '5s'
+            dirCacheTime    = '72h'
+            pollInterval    = '15s'
+            bufferSize      = '128M'
+        }
+    }
+
     Install-PCloudConfig -ConfigContent $pcloudConfig -ConfigDir $configDir -ConfigFile $configFile
-    Mount-PCloudDrive -RcloneExe $rcloneExe -Remote $config.pcloudRemote -DriveLetter $config.backupDrive
+    Mount-PCloudDrive -RcloneExe $rcloneExe -Remote $config.pcloudRemote -DriveLetter $config.backupDrive -MountSettings $mountSettings
 
     Write-Log 'rclone-auth.ps1 completed successfully.'
     $LASTEXITCODE = 0
