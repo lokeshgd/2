@@ -184,16 +184,35 @@ function Install-AnyDesk {
         }
 
         # Retrieve the AnyDesk ID (longer retry window; a fresh VM can be slow to generate its ID).
+        # Note: AnyDesk's --get-id does not always write to the pipeline/console directly; it must be
+        # captured via redirected stdout. We also fall back to reading system.conf (ad.anynet.id).
         $anydeskId = ''
         for ($i = 1; $i -le 12; $i++) {
-            $raw = (& $binary --get-id 2>$null) | Out-String
-            $anydeskId = ($raw.Trim() -split '\s+')[0]
-            if ($anydeskId -match '^\d{6,12}$') { break }
+            $outFile = Join-Path $env:TEMP "anydesk-id-$i.txt"
+            $errFile = Join-Path $env:TEMP "anydesk-err-$i.txt"
+            $p = Start-Process -FilePath $binary -ArgumentList '--get-id' -NoNewWindow -Wait `
+                -RedirectStandardOutput $outFile -RedirectStandardError $errFile -PassThru
+            $raw = ''
+            if (Test-Path $outFile) { $raw = (Get-Content $outFile -Raw -ErrorAction SilentlyContinue) }
+            $anydeskId = (($raw.Trim() -split '\s+') | Where-Object { $_ -match '^\d{6,12}$' } | Select-Object -First 1)
+            if ($anydeskId) { break }
             $anydeskId = ''
             if (-not (Get-Process -Name 'AnyDesk' -ErrorAction SilentlyContinue)) {
                 Start-Process -FilePath $binary | Out-Null
             }
             Start-Sleep -Seconds 5
+        }
+
+        # Fallback: read the machine ID straight from the system config file if present.
+        if (-not $anydeskId) {
+            $systemConf = Join-Path $env:ProgramData 'AnyDesk\system.conf'
+            if (Test-Path $systemConf) {
+                $confLine = Get-Content $systemConf -ErrorAction SilentlyContinue | Where-Object { $_ -match 'ad\.anynet\.id' }
+                if ($confLine) {
+                    $anydeskId = (($confLine -split '=', 2)[1]).Trim()
+                    Write-Log "AnyDesk ID read from system.conf: $anydeskId"
+                }
+            }
         }
 
         if ($anydeskId) {
@@ -205,7 +224,12 @@ function Install-AnyDesk {
         }
         else {
             Write-Log "AnyDesk installed but the AnyDesk ID could not be retrieved after 12 attempts." -Level Warn
-            Write-Log "AnyDesk --get-id raw output: [$raw]" -Level Warn
+            if (Test-Path $outFile) {
+                Write-Log "AnyDesk --get-id last stdout: [$(Get-Content $outFile -Raw)]" -Level Warn
+            }
+            if (Test-Path $errFile) {
+                Write-Log "AnyDesk --get-id last stderr: [$(Get-Content $errFile -Raw)]" -Level Warn
+            }
         }
     }
     catch {
