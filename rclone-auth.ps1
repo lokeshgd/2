@@ -94,19 +94,27 @@ function Mount-PCloudDrive {
     param(
         [string]$RcloneExe,
         [string]$Remote,
-        [string]$DriveLetter,
+        [string]$MountPath,
         $MountSettings
     )
 
-    $driveName = $DriveLetter.TrimEnd(':')
-    if (Get-PSDrive -Name $driveName -ErrorAction SilentlyContinue) {
-        Write-Log "Drive $DriveLetter is already in use. Skipping mount."
-        return
+    # Mount to a folder path (e.g. C:\pcloud) instead of a drive letter so the
+    # mount is visible in every logon session (RDP + AnyDesk), not just the
+    # runner's session-0 where the mount command runs.
+    if (Test-Path $MountPath) {
+        $hasChildren = @(Get-ChildItem -LiteralPath $MountPath -Force -ErrorAction SilentlyContinue).Count -gt 0
+        if ($hasChildren) {
+            Write-Log "Mount point $MountPath already populated. Skipping mount."
+            return
+        }
+    }
+    else {
+        New-Item -ItemType Directory -Path $MountPath -Force | Out-Null
     }
 
-    Write-Log "Mounting $Remote to $DriveLetter..."
+    Write-Log "Mounting $Remote to $MountPath..."
     $mountArgs = @(
-        'mount', $Remote, $DriveLetter,
+        'mount', $Remote, $MountPath,
         '--vfs-cache-mode', $MountSettings.vfsCacheMode,
         '--vfs-cache-max-size', $MountSettings.vfsCacheMaxSize,
         '--vfs-write-back', $MountSettings.vfsWriteBack,
@@ -118,23 +126,43 @@ function Mount-PCloudDrive {
 
     # Use Start-Process to run rclone in the background
     $process = Start-Process -FilePath $RcloneExe -ArgumentList $mountArgs -PassThru -WindowStyle Hidden
-    
-    # Wait for mount to become available
-    $timeout = 30
+
+    # Run rclone below-normal priority so backup I/O does not starve the RDP/AnyDesk session.
+    try {
+        $process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+        Write-Log "rclone (PID $($process.Id)) set to BelowNormal priority."
+    }
+    catch {
+        Write-Log "Could not set rclone priority: $_" -Level Warn
+    }
+
+    # Wait for the WinFsp mount point to appear (a reparse point replaces the
+    # pre-created empty directory once the mount completes).
+    $timeout = 60
     $elapsed = 0
-    while (-not (Test-Path $DriveLetter) -and $elapsed -lt $timeout) {
+    $ready = $false
+    while (-not $ready -and $elapsed -lt $timeout) {
         Start-Sleep -Seconds 2
         $elapsed += 2
+        try {
+            $item = Get-Item -LiteralPath $MountPath -Force -ErrorAction Stop
+            $ready = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+        }
+        catch {
+            $ready = $false
+        }
     }
 
-    if (-not (Test-Path $DriveLetter)) {
-        $exitCode = $process.ExitCode
-        throw "Mount failed for $DriveLetter (Timeout reached). Rclone exit code: $exitCode"
+    if (-not $ready) {
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+        throw "Mount failed for $MountPath (Timeout reached - no reparse point created)."
     }
 
-    Write-Log "pCloud mounted successfully at $DriveLetter (PID: $($process.Id))."
+    Write-Log "pCloud mounted successfully at $MountPath (PID: $($process.Id))."
     if ($env:GITHUB_STEP_SUMMARY) {
-        "### pCloud Storage`n- **Status**: Mounted`n- **Remote**: ``$Remote```n- **Drive**: ``$DriveLetter``" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+        "### pCloud Storage`n- **Status**: Mounted`n- **Remote**: ``$Remote```n- **Path**: ``$MountPath``" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
     }
 }
 
@@ -170,7 +198,7 @@ try {
     }
 
     Install-PCloudConfig -ConfigContent $pcloudConfig -ConfigDir $configDir -ConfigFile $configFile
-    Mount-PCloudDrive -RcloneExe $rcloneExe -Remote $config.pcloudRemote -DriveLetter $config.backupDrive -MountSettings $mountSettings
+    Mount-PCloudDrive -RcloneExe $rcloneExe -Remote $config.pcloudRemote -MountPath $config.backupDrive -MountSettings $mountSettings
 
     Write-Log 'rclone-auth.ps1 completed successfully.'
     $LASTEXITCODE = 0

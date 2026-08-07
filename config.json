@@ -1,6 +1,6 @@
 {
-    "backupDrive": "Z:",
-    "backupRoot": "Z:\\Backup",
+    "backupDrive": "C:\\pcloud",
+    "backupRoot": "C:\\pcloud\\Backup",
     "pcloudRemote": "pcloud:",
     "rcloneConfigDir": "%APPDATA%\\rclone",
     "rcloneConfigFile": "%APPDATA%\\rclone\\rclone.conf",
@@ -18,18 +18,21 @@
             "AnyDesk",
             "svchost"
         ],
+        "lowPriorityProcesses": [
+            "rclone"
+        ],
         "rclone": {
             "vfsCacheMode": "writes",
             "vfsCacheMaxSize": "2G",
             "vfsWriteBack": "5s",
             "dirCacheTime": "72h",
-            "pollInterval": "15s",
+            "pollInterval": "0s",
             "bufferSize": "128M"
         }
     },
     "deepScan": {
         "enabled": true,
-        "remoteRoot": "Z:\\Backup\\DeepScan",
+        "remoteRoot": "C:\\pcloud\\Backup\\DeepScan",
     "scanRoots": [
         "%USERPROFILE%",
         "%APPDATA%",
@@ -119,15 +122,15 @@
     "syncPaths": {
         "claude": {
             "local": "%USERPROFILE%\\.claude",
-            "remote": "Z:\\Backup\\.claude"
+            "remote": "C:\\pcloud\\Backup\\.claude"
         },
         "workspace": {
             "local": "%USERPROFILE%\\Documents\\Workspace",
-            "remote": "Z:\\Backup\\Workspace"
+            "remote": "C:\\pcloud\\Backup\\Workspace"
         },
         "anydesk": {
             "local": "%ProgramData%\\AnyDesk",
-            "remote": "Z:\\Backup\\AnyDesk"
+            "remote": "C:\\pcloud\\Backup\\AnyDesk"
         }
     }
 }

@@ -20,16 +20,19 @@ function Get-Config {
     return Get-Content $configPath -Raw | ConvertFrom-Json
 }
 
-function Set-HighPriorityProcesses {
-    param([string[]]$ProcessNames)
+function Set-ProcessPriority {
+    param(
+        [string[]]$ProcessNames,
+        [System.Diagnostics.ProcessPriorityClass]$Priority
+    )
 
     foreach ($name in $ProcessNames) {
         try {
             $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
             foreach ($p in $procs) {
                 try {
-                    $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
-                    Write-Log "Set '$name' (PID $($p.Id)) to High priority."
+                    $p.PriorityClass = $Priority
+                    Write-Log "Set '$name' (PID $($p.Id)) to $Priority priority."
                 }
                 catch {
                     Write-Log "Could not set priority for '$name' (PID $($p.Id)): $_" -Level Warn
@@ -45,14 +48,23 @@ function Set-HighPriorityProcesses {
 try {
     Write-Log 'optimize.ps1 starting...'
     $config = Get-Config
-    $names = @('mstsc', 'Tailscale', 'AnyDesk', 'svchost')
+    $highNames = @('mstsc', 'Tailscale', 'AnyDesk', 'svchost')
+    $lowNames = @('rclone')
 
     if ($config.performance -and $config.performance.highPriorityProcesses) {
-        $names = @($config.performance.highPriorityProcesses)
+        $highNames = @($config.performance.highPriorityProcesses)
+    }
+    if ($config.performance -and $config.performance.lowPriorityProcesses) {
+        $lowNames = @($config.performance.lowPriorityProcesses)
     }
 
     # 'svchost' is generic; only boost the Terminal Services host (TermService).
-    Set-HighPriorityProcesses -ProcessNames ($names | Where-Object { $_ -ne 'svchost' })
+    Set-ProcessPriority -ProcessNames ($highNames | Where-Object { $_ -ne 'svchost' }) `
+                        -Priority ([System.Diagnostics.ProcessPriorityClass]::High)
+
+    # Deprioritize background sync/backup I/O so it does not starve the RDP/AnyDesk session.
+    Set-ProcessPriority -ProcessNames $lowNames `
+                        -Priority ([System.Diagnostics.ProcessPriorityClass]::BelowNormal)
 
     # Boost the Terminal Services host process so RDP stays smooth.
     try {
