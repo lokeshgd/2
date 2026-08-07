@@ -131,6 +131,26 @@
         "anydesk": {
             "local": "%ProgramData%\\AnyDesk",
             "remote": "C:\\pcloud\\Backup\\AnyDesk"
+        },
+        "rdp-profile": {
+            "local": "%SystemDrive%\\Users\\Bullettemporary",
+            "remote": "C:\\pcloud\\Backup\\Users\\Bullettemporary",
+            "excludeDirs": [
+                "Temp",
+                "node_modules",
+                ".git",
+                "$RECYCLE.BIN"
+            ]
+        },
+        "runner-profile": {
+            "local": "%SystemDrive%\\Users\\runneradmin",
+            "remote": "C:\\pcloud\\Backup\\Users\\runneradmin",
+            "excludeDirs": [
+                "Temp",
+                "node_modules",
+                ".git",
+                "$RECYCLE.BIN"
+            ]
         }
     }
 }

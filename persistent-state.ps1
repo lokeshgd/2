@@ -45,7 +45,8 @@ function Sync-Directory {
         [string]$RemotePath,
         [ValidateSet('Restore', 'Backup')]
         [string]$Direction,
-        [int]$InterPacketGap = 10
+        [int]$InterPacketGap = 10,
+        [string[]]$ExcludeDirs = @()
     )
 
     if ($Direction -eq 'Restore') {
@@ -74,9 +75,14 @@ function Sync-Directory {
     #   /B    backup mode: copy files held open by running services (AnyDesk),
     #         requires admin rights (the GitHub runner has them)
     #   /IPG:<n> inter-packet gap (ms) throttles the copy so RDP stays smooth
+    #   /XD <dirs> excludes directories (junk/temp/VCS) during mirroring
     $robocopyArgs = @($from, $to, '/MIR', '/R:2', '/W:2', '/B', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
     if ($InterPacketGap -gt 0) {
         $robocopyArgs += "/IPG:$InterPacketGap"
+    }
+    if ($ExcludeDirs.Count -gt 0) {
+        $robocopyArgs += '/XD'
+        $robocopyArgs += $ExcludeDirs
     }
 
     # robocopy returns 0-7 for success, 8+ for failure
@@ -348,7 +354,8 @@ function Sync-SyncPathEntry {
         Sync-Directory -LocalPath (Expand-ConfigPath $Entry.local) `
                        -RemotePath (Expand-ConfigPath $Entry.remote) `
                        -Direction $Direction `
-                       -InterPacketGap $InterPacketGap
+                       -InterPacketGap $InterPacketGap `
+                       -ExcludeDirs $Entry.excludeDirs
     }
     catch {
         Write-Log "Sync failed for '$($Entry.Name)': $_" -Level Warn
@@ -375,7 +382,7 @@ try {
             # Restore configured sync paths, then deep-scanned items.
             foreach ($entry in $config.syncPaths.PSObject.Properties) {
                 $paths = $entry.Value
-                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote }) `
+                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $paths.excludeDirs }) `
                                    -Direction 'Restore' -InterPacketGap $ipg
             }
 
@@ -406,7 +413,7 @@ try {
             if (-not (Test-Path $backupRoot)) { New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null }
             foreach ($entry in $config.syncPaths.PSObject.Properties) {
                 $paths = $entry.Value
-                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote }) `
+                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $paths.excludeDirs }) `
                                    -Direction 'Backup' -InterPacketGap $ipg
             }
 
