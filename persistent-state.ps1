@@ -71,8 +71,10 @@ function Sync-Directory {
     # Robocopy options:
     #   /MIR  mirror, /R:2 retry, /W:2 wait, /NFL no file list, /NDL no dir list,
     #   /NJH no job header, /NJS no job summary, /NP no progress
+    #   /B    backup mode: copy files held open by running services (AnyDesk),
+    #         requires admin rights (the GitHub runner has them)
     #   /IPG:<n> inter-packet gap (ms) throttles the copy so RDP stays smooth
-    $robocopyArgs = @($from, $to, '/MIR', '/R:2', '/W:2', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+    $robocopyArgs = @($from, $to, '/MIR', '/R:2', '/W:2', '/B', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
     if ($InterPacketGap -gt 0) {
         $robocopyArgs += "/IPG:$InterPacketGap"
     }
@@ -321,7 +323,7 @@ function Sync-FileEntry {
         New-Item -ItemType Directory -Path $toDir -Force | Out-Null
     }
 
-    $robocopyArgs = @($from, $to, '/R:2', '/W:2', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+    $robocopyArgs = @($from, $to, '/R:2', '/W:2', '/B', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
     if ($InterPacketGap -gt 0) {
         $robocopyArgs += "/IPG:$InterPacketGap"
     }

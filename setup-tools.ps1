@@ -1,6 +1,10 @@
 #Requires -Version 7.0
 [CmdletBinding()]
-param()
+param(
+    # Skip AnyDesk install/configure (used when AnyDesk config must be restored
+    # from pCloud BEFORE the service starts, to reuse the machine ID).
+    [switch]$SkipAnyDesk
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -314,7 +318,12 @@ try {
     Install-Git -ToolConfig $config.tools.git
     Install-Node -ToolConfig $config.tools.node
     Install-WinFsp -ToolConfig $config.tools.winfsp
-    Install-AnyDesk -ToolConfig $config.tools.anydesk -AnyConfig $config.anydesk -Password $password
+    if (-not $SkipAnyDesk) {
+        Install-AnyDesk -ToolConfig $config.tools.anydesk -AnyConfig $config.anydesk -Password $password
+    }
+    else {
+        Write-Log 'AnyDesk install skipped (will run after persistent state restore to reuse machine ID).'
+    }
     Install-NpmGlobal -PackageName $config.tools.claudeCode.npmPackage
     Install-NpmGlobal -PackageName $config.tools.openCode.npmPackage
     Install-Antigravity -ToolConfig $config.tools.antigravity
