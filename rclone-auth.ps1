@@ -101,16 +101,13 @@ function Mount-PCloudDrive {
     # Mount to a folder path (e.g. C:\pcloud) instead of a drive letter so the
     # mount is visible in every logon session (RDP + AnyDesk), not just the
     # runner's session-0 where the mount command runs.
-    if (Test-Path $MountPath) {
-        $hasChildren = @(Get-ChildItem -LiteralPath $MountPath -Force -ErrorAction SilentlyContinue).Count -gt 0
-        if ($hasChildren) {
-            Write-Log "Mount point $MountPath already populated. Skipping mount."
-            return
-        }
-    }
-    else {
+    if (-not (Test-Path $MountPath)) {
         New-Item -ItemType Directory -Path $MountPath -Force | Out-Null
     }
+
+    # Capture rclone's output so failures are visible instead of a blind timeout.
+    $outLog = Join-Path $env:TEMP 'rclone-mount.out.log'
+    $errLog = Join-Path $env:TEMP 'rclone-mount.err.log'
 
     Write-Log "Mounting $Remote to $MountPath..."
     $mountArgs = @(
@@ -124,8 +121,10 @@ function Mount-PCloudDrive {
         '--no-console'
     )
 
-    # Use Start-Process to run rclone in the background
-    $process = Start-Process -FilePath $RcloneExe -ArgumentList $mountArgs -PassThru -WindowStyle Hidden
+    # Use Start-Process to run rclone in the background with logged output.
+    $process = Start-Process -FilePath $RcloneExe -ArgumentList $mountArgs `
+                             -PassThru -WindowStyle Hidden `
+                             -RedirectStandardOutput $outLog -RedirectStandardError $errLog
 
     # Run rclone below-normal priority so backup I/O does not starve the RDP/AnyDesk session.
     try {
@@ -136,28 +135,32 @@ function Mount-PCloudDrive {
         Write-Log "Could not set rclone priority: $_" -Level Warn
     }
 
-    # Wait for the WinFsp mount point to appear (a reparse point replaces the
-    # pre-created empty directory once the mount completes).
-    $timeout = 60
+    # The remote root contains a known 'Backup' folder from prior runs; its
+    # presence through the mount proves the VFS is serving remote data.
+    $probe = Join-Path $MountPath 'Backup'
+    $timeout = 120
     $elapsed = 0
     $ready = $false
-    while (-not $ready -and $elapsed -lt $timeout) {
+    while ($elapsed -lt $timeout) {
         Start-Sleep -Seconds 2
         $elapsed += 2
-        try {
-            $item = Get-Item -LiteralPath $MountPath -Force -ErrorAction Stop
-            $ready = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+
+        if ($process.HasExited) {
+            $err = if (Test-Path $errLog) { (Get-Content $errLog -Raw -ErrorAction SilentlyContinue) } else { '' }
+            $out = if (Test-Path $outLog) { (Get-Content $outLog -Raw -ErrorAction SilentlyContinue) } else { '' }
+            throw "rclone exited early (code $($process.ExitCode)).`nSTDERR: $err`nSTDOUT: $out"
         }
-        catch {
-            $ready = $false
-        }
+
+        $ready = Test-Path -LiteralPath $probe -ErrorAction SilentlyContinue
+        if ($ready) { break }
     }
 
     if (-not $ready) {
         if (-not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         }
-        throw "Mount failed for $MountPath (Timeout reached - no reparse point created)."
+        $err = if (Test-Path $errLog) { (Get-Content $errLog -Raw -ErrorAction SilentlyContinue) } else { '' }
+        throw "Mount failed for $MountPath (Timeout reached, probe '$probe' never appeared).`nSTDERR: $err"
     }
 
     Write-Log "pCloud mounted successfully at $MountPath (PID: $($process.Id))."
