@@ -101,8 +101,14 @@ function Mount-PCloudDrive {
     # Mount to a folder path (e.g. C:\pcloud) instead of a drive letter so the
     # mount is visible in every logon session (RDP + AnyDesk), not just the
     # runner's session-0 where the mount command runs.
-    if (-not (Test-Path $MountPath)) {
-        New-Item -ItemType Directory -Path $MountPath -Force | Out-Null
+    # NOTE: rclone refuses to mount over an existing folder ("mountpoint path
+    # already exists"), so we must NOT pre-create it — let rclone create it.
+    if (Test-Path $MountPath) {
+        $hasChildren = @(Get-ChildItem -LiteralPath $MountPath -Force -ErrorAction SilentlyContinue).Count -gt 0
+        if ($hasChildren) {
+            Write-Log "Mount point $MountPath already populated. Skipping mount."
+            return
+        }
     }
 
     # Capture rclone's output so failures are visible instead of a blind timeout.
