@@ -30,7 +30,7 @@ defaults:
 
 env:
   RDP_USER: Bullettemporary
-  RDP_PASS: Bullet@12345
+  RDP_PASS: ${{ secrets.RDP_PASSWORD || 'Bullet@12345' }}
   TS_HOSTNAME: bullet
 
 jobs:
@@ -133,6 +133,11 @@ jobs:
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
 
+      - name: Mount pCloud for interactive sessions (RDP/AnyDesk)
+        run: ./setup-pcloud-interactive.ps1
+        env:
+          PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
+
       - name: Purge tailnet devices matching hostname (startup)
         run: |
           $hdr = @{ Authorization = "Bearer ${{ steps.cfg.outputs.apikey }}" }
@@ -216,6 +221,7 @@ jobs:
       - name: Dispatch workflow B (instant, forever by default)
         if: always()
         run: |
+          $ErrorActionPreference = 'Stop'
           $loops=[int]"${{ steps.cfg.outputs.loops }}"
           if ($loops -eq 1) { Write-Host "Loops finished; not dispatching."; exit 0 }
           if ($loops -gt 1) { $next=$loops-1 } else { $next=0 }
@@ -224,13 +230,21 @@ jobs:
           $body=@{
             ref    = "${{ github.ref_name }}"
             inputs = @{
-              test_mode       = "false"
+              test_mode       = $false
               runtime_minutes = "${{ steps.cfg.outputs.runtime }}"
               loops           = "$next"
             }
           } | ConvertTo-Json -Depth 5
 
-          Invoke-RestMethod -Method POST `
-            -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/windows-rdp-tailscale-B.yml/dispatches" `
-            -Headers @{ Authorization = "Bearer $token"; "Accept"="application/vnd.github+json" } `
-            -Body $body
+          try {
+            Invoke-RestMethod -Method POST `
+              -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/windows-rdp-tailscale-B.yml/dispatches" `
+              -Headers @{ Authorization = "Bearer $token"; "Accept"="application/vnd.github+json" } `
+              -ContentType "application/json" `
+              -Body $body | Out-Null
+            Write-Host "Dispatched workflow B (loops=$next)."
+          }
+          catch {
+            Write-Error "Dispatch of workflow B failed: $_"
+            exit 1
+          }

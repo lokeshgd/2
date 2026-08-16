@@ -105,15 +105,23 @@ function Install-NpmGlobal {
             return
         }
 
-        Write-Log "Checking $PackageName..."
-        $installed = (& npm list -g $PackageName --depth=0 2>$null) -match $PackageName
-        if ($installed) {
+        # Install into a system-wide prefix so the tools are also on PATH for the
+        # interactive RDP/AnyDesk user, not just the runner's account. Node's
+        # install dir (Program Files\nodejs) is already on the machine PATH.
+        $prefix = Join-Path $env:ProgramFiles 'nodejs'
+        $modulePath = Join-Path $prefix "node_modules\$PackageName"
+
+        Write-Log "Checking $PackageName (system-wide prefix $prefix)..."
+        if (Test-Path $modulePath) {
             Write-Log "$PackageName already installed globally."
             return
         }
 
         Write-Log "Installing $PackageName globally..."
-        & npm install -g $PackageName --silent
+        & npm install -g --prefix $prefix $PackageName --silent
+        if (-not (Test-Path $modulePath)) {
+            throw "npm install finished but module not found at $modulePath"
+        }
         Write-Log "$PackageName installed successfully."
     }
     catch {
@@ -274,6 +282,11 @@ function Install-Antigravity {
     param($ToolConfig)
     try {
         $binary = Expand-ConfigPath $ToolConfig.binary
+        # With /allusers the IDE goes to Program Files, not the runner's LocalAppData.
+        $systemBinary = Join-Path $env:ProgramFiles 'Antigravity\Antigravity.exe'
+        if (-not (Test-Path $binary) -and (Test-Path $systemBinary)) {
+            $binary = $systemBinary
+        }
         if (Test-Path $binary) {
             Write-Log "Antigravity IDE already installed at $binary"
             return
@@ -290,10 +303,13 @@ function Install-Antigravity {
         # Never block the workflow: launch the installer and only wait briefly for the binary.
         Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' | Out-Null
         $deadline = (Get-Date).AddMinutes(3)
-        while (-not (Test-Path $binary) -and (Get-Date) -lt $deadline) {
+        while (-not (Test-Path $binary) -and -not (Test-Path $systemBinary) -and (Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 10
         }
 
+        if (-not (Test-Path $binary) -and (Test-Path $systemBinary)) {
+            $binary = $systemBinary
+        }
         if (Test-Path $binary) {
             Write-Log "Antigravity IDE installed successfully at $binary"
         }

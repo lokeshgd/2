@@ -329,7 +329,11 @@ function Sync-FileEntry {
         New-Item -ItemType Directory -Path $toDir -Force | Out-Null
     }
 
-    $robocopyArgs = @($from, $to, '/R:2', '/W:2', '/B', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+    # robocopy expects <SourceDir> <DestDir> <FileSpec>, not full file paths.
+    $fromDir = Split-Path $from -Parent
+    $fileName = Split-Path $from -Leaf
+
+    $robocopyArgs = @($fromDir, $toDir, $fileName, '/R:2', '/W:2', '/B', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
     if ($InterPacketGap -gt 0) {
         $robocopyArgs += "/IPG:$InterPacketGap"
     }
@@ -382,7 +386,13 @@ try {
             # Restore configured sync paths, then deep-scanned items.
             foreach ($entry in $config.syncPaths.PSObject.Properties) {
                 $paths = $entry.Value
-                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $paths.excludeDirs }) `
+                # excludeDirs is optional per sync path; access it safely so
+                # StrictMode does not throw for entries without the property.
+                $excludeDirs = @()
+                if ($paths.PSObject.Properties['excludeDirs']) {
+                    $excludeDirs = @($paths.excludeDirs)
+                }
+                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $excludeDirs }) `
                                    -Direction 'Restore' -InterPacketGap $ipg
             }
 
@@ -413,7 +423,13 @@ try {
             if (-not (Test-Path $backupRoot)) { New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null }
             foreach ($entry in $config.syncPaths.PSObject.Properties) {
                 $paths = $entry.Value
-                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $paths.excludeDirs }) `
+                # excludeDirs is optional per sync path; access it safely so
+                # StrictMode does not throw for entries without the property.
+                $excludeDirs = @()
+                if ($paths.PSObject.Properties['excludeDirs']) {
+                    $excludeDirs = @($paths.excludeDirs)
+                }
+                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $excludeDirs }) `
                                    -Direction 'Backup' -InterPacketGap $ipg
             }
 

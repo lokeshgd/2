@@ -207,6 +207,13 @@ try {
     }
 
     Install-PCloudConfig -ConfigContent $pcloudConfig -ConfigDir $configDir -ConfigFile $configFile
+
+    # Also write the config next to the rclone binary so interactive (RDP/AnyDesk)
+    # sessions can mount pCloud with the same credentials via the PCloudMount task.
+    $sharedConfigDir = $config.tools.rclone.installDir
+    if (-not (Test-Path $sharedConfigDir)) { New-Item -ItemType Directory -Path $sharedConfigDir -Force | Out-Null }
+    Copy-Item $configFile (Join-Path $sharedConfigDir 'rclone.conf') -Force
+
     Mount-PCloudDrive -RcloneExe $rcloneExe -Remote $config.pcloudRemote -MountPath $config.backupDrive -MountSettings $mountSettings
 
     Write-Log 'rclone-auth.ps1 completed successfully.'
