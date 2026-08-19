@@ -74,9 +74,12 @@ function Sync-Directory {
     #   /NJH no job header, /NJS no job summary, /NP no progress
     #   /B    backup mode: copy files held open by running services (AnyDesk),
     #         requires admin rights (the GitHub runner has them)
+    #   /XJ   exclude junction points / symbolic links. User profiles (runneradmin,
+    #         Bullettemporary) are full of AppData junctions; /MIR treats them as
+    #         real directories, which can explode the copy or loop forever.
     #   /IPG:<n> inter-packet gap (ms) throttles the copy so RDP stays smooth
     #   /XD <dirs> excludes directories (junk/temp/VCS) during mirroring
-    $robocopyArgs = @($from, $to, '/MIR', '/R:2', '/W:2', '/B', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+    $robocopyArgs = @($from, $to, '/MIR', '/R:2', '/W:2', '/B', '/XJ', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
     if ($InterPacketGap -gt 0) {
         $robocopyArgs += "/IPG:$InterPacketGap"
     }
@@ -333,7 +336,7 @@ function Sync-FileEntry {
     $fromDir = Split-Path $from -Parent
     $fileName = Split-Path $from -Leaf
 
-    $robocopyArgs = @($fromDir, $toDir, $fileName, '/R:2', '/W:2', '/B', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+    $robocopyArgs = @($fromDir, $toDir, $fileName, '/R:2', '/W:2', '/B', '/XJ', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
     if ($InterPacketGap -gt 0) {
         $robocopyArgs += "/IPG:$InterPacketGap"
     }
