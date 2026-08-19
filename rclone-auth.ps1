@@ -98,11 +98,13 @@ function Mount-PCloudDrive {
         $MountSettings
     )
 
-    # Mount to a folder path (e.g. C:\pcloud) instead of a drive letter so the
-    # mount is visible in every logon session (RDP + AnyDesk), not just the
-    # runner's session-0 where the mount command runs.
-    # NOTE: rclone refuses to mount over an existing folder ("mountpoint path
-    # already exists"), so we must NOT pre-create it — let rclone create it.
+    # Mount to a folder path (e.g. C:\pcloud). The mount MUST be owned by
+    # Task Scheduler: the GitHub Actions Windows runner kills child processes
+    # spawned by a step when that step ends, so a plain Start-Process rclone
+    # mount vanished between steps (restore/backup never saw C:\pcloud). A
+    # scheduled task survives step boundaries.
+    # NOTE: rclone refuses to mount over an existing populated folder, so we
+    # must NOT pre-create it — let rclone create the mount point.
     if (Test-Path $MountPath) {
         $hasChildren = @(Get-ChildItem -LiteralPath $MountPath -Force -ErrorAction SilentlyContinue).Count -gt 0
         if ($hasChildren) {
@@ -111,13 +113,15 @@ function Mount-PCloudDrive {
         }
     }
 
-    # Capture rclone's output so failures are visible instead of a blind timeout.
-    $outLog = Join-Path $env:TEMP 'rclone-mount.out.log'
-    $errLog = Join-Path $env:TEMP 'rclone-mount.err.log'
+    $taskName = 'PCloudMountRunner'
+    $sharedConfig = Join-Path (Split-Path $RcloneExe -Parent) 'rclone.conf'
+    if (-not (Test-Path $sharedConfig)) {
+        throw "Shared rclone config not found at $sharedConfig."
+    }
 
-    Write-Log "Mounting $Remote to $MountPath..."
     $mountArgs = @(
         'mount', $Remote, $MountPath,
+        '--config', "`"$sharedConfig`"",
         '--vfs-cache-mode', $MountSettings.vfsCacheMode,
         '--vfs-cache-max-size', $MountSettings.vfsCacheMaxSize,
         '--vfs-write-back', $MountSettings.vfsWriteBack,
@@ -126,20 +130,13 @@ function Mount-PCloudDrive {
         '--buffer-size', $MountSettings.bufferSize,
         '--no-console'
     )
+    $argLine = $mountArgs -join ' '
 
-    # Use Start-Process to run rclone in the background with logged output.
-    $process = Start-Process -FilePath $RcloneExe -ArgumentList $mountArgs `
-                             -PassThru -WindowStyle Hidden `
-                             -RedirectStandardOutput $outLog -RedirectStandardError $errLog
-
-    # Run rclone below-normal priority so backup I/O does not starve the RDP/AnyDesk session.
-    try {
-        $process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
-        Write-Log "rclone (PID $($process.Id)) set to BelowNormal priority."
-    }
-    catch {
-        Write-Log "Could not set rclone priority: $_" -Level Warn
-    }
+    Write-Log "Mounting $Remote to $MountPath via scheduled task $taskName..."
+    $action = New-ScheduledTaskAction -Execute $RcloneExe -Argument $argLine
+    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Highest
+    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
+    Start-ScheduledTask -TaskName $taskName
 
     # The remote root contains a known 'Backup' folder from prior runs; its
     # presence through the mount proves the VFS is serving remote data.
@@ -147,29 +144,22 @@ function Mount-PCloudDrive {
     $timeout = 120
     $elapsed = 0
     $ready = $false
+    $taskInfo = $null
     while ($elapsed -lt $timeout) {
         Start-Sleep -Seconds 2
         $elapsed += 2
 
-        if ($process.HasExited) {
-            $err = if (Test-Path $errLog) { (Get-Content $errLog -Raw -ErrorAction SilentlyContinue) } else { '' }
-            $out = if (Test-Path $outLog) { (Get-Content $outLog -Raw -ErrorAction SilentlyContinue) } else { '' }
-            throw "rclone exited early (code $($process.ExitCode)).`nSTDERR: $err`nSTDOUT: $out"
-        }
-
+        $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName
         $ready = Test-Path -LiteralPath $probe -ErrorAction SilentlyContinue
         if ($ready) { break }
     }
 
     if (-not $ready) {
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
-        $err = if (Test-Path $errLog) { (Get-Content $errLog -Raw -ErrorAction SilentlyContinue) } else { '' }
-        throw "Mount failed for $MountPath (Timeout reached, probe '$probe' never appeared).`nSTDERR: $err"
+        $lastResult = if ($taskInfo) { $taskInfo.LastTaskResult } else { 'unknown' }
+        throw "Mount failed for $MountPath (probe '$probe' never appeared within ${timeout}s; task last result: $lastResult)."
     }
 
-    Write-Log "pCloud mounted successfully at $MountPath (PID: $($process.Id))."
+    Write-Log "pCloud mounted successfully at $MountPath (task $taskName)."
     if ($env:GITHUB_STEP_SUMMARY) {
         "### pCloud Storage`n- **Status**: Mounted`n- **Remote**: ``$Remote```n- **Path**: ``$MountPath``" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
     }
