@@ -8,9 +8,9 @@ on:
         type: boolean
         default: false
       runtime_minutes:
-        description: "Runtime in minutes (max 360; capped to 350)"
+        description: "Runtime in minutes (default 300 so end-of-run backup fits in the 360-min job timeout; capped to 350)"
         required: false
-        default: "350"
+        default: "300"
       loops:
         description: "How many handoffs (0 = infinite)"
         required: false
@@ -46,7 +46,7 @@ jobs:
           RAW_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
           RAW_PAT:     ${{ secrets.GH_API_TOKEN }}
           RAW_TEST:    ${{ inputs.test_mode == true && 'true' || 'false' }}
-          RAW_RUNTIME: ${{ inputs.runtime_minutes || '350' }}
+          RAW_RUNTIME: ${{ inputs.runtime_minutes || '300' }}
           RAW_LOOPS:   ${{ inputs.loops || '0' }}
         run: |
           function ToIntOr($v, $def){ if("$v" -match '^\d+$'){[int]$v}else{[int]$def} }
@@ -63,11 +63,12 @@ jobs:
           # Robust boolean
           $isTest = ($env:RAW_TEST -match '^(?i:true|1|yes|on)$')
 
-          $runtime = ToIntOr $env:RAW_RUNTIME 350
+          $runtime = ToIntOr $env:RAW_RUNTIME 300
           if ($isTest) { $runtime = 5 }
 
-          # Ensure ~6h (350) when test_mode is off and value is too small
-          if (-not $isTest -and $runtime -lt 6) { $runtime = 350 }
+          # Floor: default ~5h (300) leaves headroom for the slow end-of-run
+          # backup inside the 360-min job timeout. Absolute cap stays 350.
+          if (-not $isTest -and $runtime -lt 6) { $runtime = 300 }
           if ($runtime -gt 350) { $runtime = 350 }
 
           $loops = ToIntOr $env:RAW_LOOPS 0
