@@ -141,16 +141,6 @@
                 ".git",
                 "$RECYCLE.BIN"
             ]
-        },
-        "runner-profile": {
-            "local": "%SystemDrive%\\Users\\runneradmin",
-            "remote": "C:\\pcloud\\Backup\\Users\\runneradmin",
-            "excludeDirs": [
-                "Temp",
-                "node_modules",
-                ".git",
-                "$RECYCLE.BIN"
-            ]
         }
     }
 }

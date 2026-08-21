@@ -94,6 +94,7 @@ jobs:
           PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
 
       - name: Restore persistent state
+        timeout-minutes: 30
         run: ./persistent-state.ps1 -Action Restore
         env:
           PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
@@ -194,6 +195,7 @@ jobs:
 
       - name: Backup persistent state
         if: always()
+        timeout-minutes: 60
         run: ./persistent-state.ps1 -Action Backup
         env:
           PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
