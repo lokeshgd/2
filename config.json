@@ -137,6 +137,9 @@
             "remote": "C:\\pcloud\\Backup\\Users\\Bullettemporary",
             "excludeDirs": [
                 "Temp",
+                "AppData",
+                "Downloads",
+                ".cache",
                 "node_modules",
                 ".git",
                 "$RECYCLE.BIN"

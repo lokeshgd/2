@@ -381,6 +381,11 @@ try {
         $ipg = [int]$config.performance.robocopyIPG
     }
 
+    # Restore runs before any interactive session exists, so throttling only
+    # slows it down for no benefit. Use no /IPG on restore; keep the throttle
+    # on backup so a still-connected RDP/AnyDesk session stays smooth.
+    $restoreIpg = 0
+
     if ($Action -eq 'Restore') {
         if (-not (Test-BackupAvailable -BackupRoot $backupRoot -DriveLetter $backupDrive)) {
             Write-Log 'Backup drive unavailable. Starting with clean state.' -Level Warn
@@ -396,7 +401,7 @@ try {
                     $excludeDirs = @($paths.excludeDirs)
                 }
                 Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $excludeDirs }) `
-                                   -Direction 'Restore' -InterPacketGap $ipg
+                                   -Direction 'Restore' -InterPacketGap $restoreIpg
             }
 
             if ($config.deepScan.enabled) {
@@ -404,10 +409,10 @@ try {
                     try {
                         $isDir = $item.Local -and (Test-Path $item.Local) -and (Get-Item $item.Local).PSIsContainer
                         if ($isDir) {
-                            Sync-Directory -LocalPath $item.Local -RemotePath $item.Remote -Direction 'Restore' -InterPacketGap $ipg
+                            Sync-Directory -LocalPath $item.Local -RemotePath $item.Remote -Direction 'Restore' -InterPacketGap $restoreIpg
                         }
                         else {
-                            Sync-FileEntry -LocalFile $item.Local -RemoteFile $item.Remote -Direction 'Restore' -InterPacketGap $ipg
+                            Sync-FileEntry -LocalFile $item.Local -RemoteFile $item.Remote -Direction 'Restore' -InterPacketGap $restoreIpg
                         }
                     }
                     catch {
