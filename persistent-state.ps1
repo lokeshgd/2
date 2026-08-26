@@ -436,6 +436,12 @@ try {
             $restartAnyDesk = $true
             Start-Sleep -Seconds 3
         }
+        # A stopped service can still leave the AnyDesk GUI/daemon running, and
+        # that process keeps %APPDATA%\AnyDesk files locked (robocopy exits 11).
+        # Kill any leftovers so every file is readable; the service restart
+        # below brings AnyDesk back for the next handoff.
+        Get-Process -Name 'AnyDesk' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
 
         if (-not (Test-BackupAvailable -BackupRoot $backupRoot -DriveLetter $backupDrive)) {
             Write-Log 'Backup drive unavailable. Skipping file sync.' -Level Warn
