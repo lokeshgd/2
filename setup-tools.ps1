@@ -119,6 +119,9 @@ function Install-NpmGlobal {
 
         Write-Log "Installing $PackageName globally..."
         & npm install -g --prefix $prefix $PackageName --silent
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install for $PackageName failed with exit code $LASTEXITCODE"
+        }
         if (-not (Test-Path $modulePath)) {
             throw "npm install finished but module not found at $modulePath"
         }

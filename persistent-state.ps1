@@ -424,6 +424,19 @@ try {
     }
     else {
         # Backup Action
+        # Stop AnyDesk while its files are backed up: a running AnyDesk service
+        # keeps system.conf/service.conf open, so robocopy exits 8/9/11 on them
+        # and the machine ID / password hash never reach the backup. Restart the
+        # service after the backup completes (the run is ending anyway).
+        $restartAnyDesk = $false
+        $anydeskService = Get-Service -Name 'AnyDesk' -ErrorAction SilentlyContinue
+        if ($anydeskService -and $anydeskService.Status -eq 'Running') {
+            Write-Log 'Stopping AnyDesk service for a clean backup...'
+            Stop-Service -Name 'AnyDesk' -Force -ErrorAction SilentlyContinue
+            $restartAnyDesk = $true
+            Start-Sleep -Seconds 3
+        }
+
         if (-not (Test-BackupAvailable -BackupRoot $backupRoot -DriveLetter $backupDrive)) {
             Write-Log 'Backup drive unavailable. Skipping file sync.' -Level Warn
         }
@@ -456,6 +469,16 @@ try {
                         Write-Log "Deep-scan backup failed for '$($item.Name)': $_" -Level Warn
                     }
                 }
+            }
+        }
+
+        if ($restartAnyDesk) {
+            try {
+                Start-Service -Name 'AnyDesk' -ErrorAction Stop
+                Write-Log 'AnyDesk service restarted after backup.'
+            }
+            catch {
+                Write-Log "Failed to restart AnyDesk service after backup: $_" -Level Warn
             }
         }
 
