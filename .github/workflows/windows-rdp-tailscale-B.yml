@@ -95,7 +95,7 @@ jobs:
 
       - name: Restore persistent state
         id: restore
-        timeout-minutes: 30
+        timeout-minutes: 60
         run: ./persistent-state.ps1 -Action Restore
         env:
           PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}

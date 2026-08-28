@@ -287,38 +287,45 @@ function Install-Antigravity {
         $binary = Expand-ConfigPath $ToolConfig.binary
         # With /allusers the IDE goes to Program Files, not the runner's LocalAppData.
         $systemBinary = Join-Path $env:ProgramFiles 'Antigravity\Antigravity.exe'
-        if (-not (Test-Path $binary) -and (Test-Path $systemBinary)) {
-            $binary = $systemBinary
-        }
-        if (Test-Path $binary) {
-            Write-Log "Antigravity IDE already installed at $binary"
-            return
+        $altBinary = Join-Path $env:LocalAppData 'Antigravity\Antigravity.exe'
+        $candidates = @($binary, $systemBinary, $altBinary)
+
+        foreach ($c in $candidates) {
+            if (Test-Path $c) {
+                Write-Log "Antigravity IDE already installed at $c"
+                return
+            }
         }
 
         Write-Log "Downloading Antigravity IDE from $($ToolConfig.downloadUrl)..."
         $installer = Join-Path $env:TEMP 'Antigravity-IDE-Installer.exe'
-        Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $installer -UseBasicParsing -TimeoutSec 120
+        Invoke-WebRequest -Uri $ToolConfig.downloadUrl -OutFile $installer -UseBasicParsing -TimeoutSec 180
         if (-not (Test-Path $installer)) {
             throw 'Antigravity installer download produced no file.'
         }
 
-        Write-Log "Installing Antigravity IDE silently (non-blocking)..."
-        # Never block the workflow: launch the installer and only wait briefly for the binary.
-        Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' | Out-Null
-        $deadline = (Get-Date).AddMinutes(3)
-        while (-not (Test-Path $binary) -and -not (Test-Path $systemBinary) -and (Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 10
+        # Blocking install: wait for the installer process AND then for the
+        # binary to appear, so the IDE is guaranteed present for the interactive
+        # RDP/AnyDesk user instead of being orphaned when the step moves on.
+        Write-Log "Installing Antigravity IDE silently (blocking)..."
+        $proc = Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' -PassThru
+        if (-not $proc.WaitForExit(240000)) {
+            Write-Log 'Antigravity installer did not exit within 4 minutes.' -Level Warn
         }
 
-        if (-not (Test-Path $binary) -and (Test-Path $systemBinary)) {
-            $binary = $systemBinary
+        $found = ''
+        $deadline = (Get-Date).AddSeconds(60)
+        while (-not $found -and (Get-Date) -lt $deadline) {
+            foreach ($c in $candidates) {
+                if (Test-Path $c) { $found = $c; break }
+            }
+            if (-not $found) { Start-Sleep -Seconds 5 }
         }
-        if (Test-Path $binary) {
-            Write-Log "Antigravity IDE installed successfully at $binary"
+
+        if (-not $found) {
+            throw "Antigravity binary not found after install (checked: $($candidates -join ', '))."
         }
-        else {
-            Write-Log 'Antigravity install still running in the background; continuing without waiting.' -Level Warn
-        }
+        Write-Log "Antigravity IDE installed successfully at $found"
     }
     catch {
         Write-Log "Antigravity install failed: $_" -Level Warn

@@ -369,6 +369,335 @@ function Sync-SyncPathEntry {
     }
 }
 
+# ---------------------------------------------------------------------------
+# Indexed, incremental sync engine.
+#
+# Instead of robocopy /MIR on the whole tree every run, keep a small JSON index
+# per sync path (rel path -> { size, lastWriteTimeUtc ticks }) in the backup.
+# Backup walks the source, copies ONLY files whose size or mtime changed, then
+# writes the fresh index. Restore reads the index and copies only what is
+# missing or differs locally. This keeps every run fast and only touches the
+# directories/files that actually changed.
+# ---------------------------------------------------------------------------
+
+function Read-FileIndex {
+    param([string]$Path)
+    $map = @{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $map }
+    try {
+        $json = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        if ($json -and $json.files) {
+            foreach ($p in $json.files.PSObject.Properties) {
+                $map[$p.Name] = [pscustomobject]@{
+                    size       = [long]$p.Value.size
+                    mtimeTicks = [long]$p.Value.mtimeTicks
+                }
+            }
+        }
+    }
+    catch {
+        Write-Log "Failed to read index $Path : $_" -Level Warn
+    }
+    return $map
+}
+
+function Write-FileIndex {
+    param([string]$Path, [hashtable]$Index)
+    $dir = Split-Path -Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $obj = [pscustomobject]@{
+        version = 1
+        updated = (Get-Date).ToUniversalTime().ToString('o')
+        files   = $Index
+    }
+    $json = $obj | ConvertTo-Json -Depth 4 -Compress
+    Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
+}
+
+function Copy-FileRobust {
+    param([string]$Src, [string]$Dst, [int]$InterPacketGap = 0)
+    $dstDir = Split-Path -Path $Dst -Parent
+    if (-not (Test-Path -LiteralPath $dstDir)) {
+        New-Item -ItemType Directory -Path $dstDir -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    try {
+        [System.IO.File]::Copy($Src, $Dst, $true)
+        $mtime = [System.IO.File]::GetLastWriteTimeUtc($Src)
+        [System.IO.File]::SetLastWriteTimeUtc($Dst, $mtime)
+        return $true
+    }
+    catch {
+        # Locked / in-use file (Chrome SQLite, open logs, etc.): fall back to
+        # robocopy backup mode (/B) which can read files held open by processes.
+        $srcDir = Split-Path -Path $Src -Parent
+        $name = Split-Path -Path $Src -Leaf
+        $args = @($srcDir, $dstDir, $name, '/R:2', '/W:2', '/B', '/XJ', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+        if ($InterPacketGap -gt 0) {
+            $args += "/IPG:$InterPacketGap"
+        }
+        & robocopy @args | Out-Null
+        if ($LASTEXITCODE -ge 8) { return $false }
+        return $true
+    }
+}
+
+function Get-TreeFiles {
+    param(
+        [string]$Root,
+        [string[]]$ExcludeDirs = @(),
+        [string[]]$ExcludeNames = @()
+    )
+    $results = [System.Collections.Generic.List[object]]::new()
+    $excludeNamesLower = @($ExcludeNames | ForEach-Object { $_.ToLowerInvariant() })
+    $excludeDirsLower  = @($ExcludeDirs | ForEach-Object { $_.ToLowerInvariant() })
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+
+    $stack = [System.Collections.Generic.Stack[string]]::new()
+    $stack.Push($Root)
+    while ($stack.Count -gt 0) {
+        $dir = $stack.Pop()
+        $relDir = ''
+        if ($dir.Length -gt $rootFull.Length) {
+            $relDir = $dir.Substring($rootFull.Length).TrimStart('\', '/')
+        }
+
+        # Prune whole directories whose (relative) path segment matches a name
+        # in the exclusion list (cache dirs, temp, node_modules, ...).
+        $skipDir = $false
+        foreach ($seg in ($relDir -split '[\\/]')) {
+            if ($seg -eq '') { continue }
+            if ($excludeNamesLower -contains $seg.ToLowerInvariant()) { $skipDir = $true; break }
+            foreach ($ex in $excludeDirsLower) {
+                if ($seg.ToLowerInvariant() -like "*$ex*") { $skipDir = $true; break }
+            }
+            if ($skipDir) { break }
+        }
+        if ($skipDir) { continue }
+
+        $subDirs  = @(Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue)
+        $subFiles = @(Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue)
+
+        foreach ($d in $subDirs) {
+            # Never descend into junctions / symlinks (profile AppData is full
+            # of them; following them can loop or escape the tree).
+            if ($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+            $stack.Push($d.FullName)
+        }
+
+        foreach ($f in $subFiles) {
+            if ($f.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+            $full = [System.IO.Path]::GetFullPath($f.FullName)
+            if (-not $full.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $rel = $full.Substring($rootFull.Length).TrimStart('\', '/')
+
+            $skip = $false
+            foreach ($seg in ($rel -split '[\\/]')) {
+                if ($excludeNamesLower -contains $seg.ToLowerInvariant()) { $skip = $true; break }
+                foreach ($ex in $excludeDirsLower) {
+                    if ($seg.ToLowerInvariant() -like "*$ex*") { $skip = $true; break }
+                }
+                if ($skip) { break }
+            }
+            if ($skip) { continue }
+
+            $results.Add([pscustomobject]@{
+                Rel        = $rel
+                Size       = [long]$f.Length
+                MtimeTicks = [long]$f.LastWriteTimeUtc.Ticks
+            })
+        }
+    }
+    return $results
+}
+
+function Sync-IndexedDirectory {
+    param(
+        [string]$Name,
+        [string]$LocalPath,
+        [string]$RemotePath,
+        [string]$IndexFile,
+        [ValidateSet('Restore', 'Backup')]
+        [string]$Direction,
+        [string[]]$ExcludeDirs = @(),
+        [string[]]$ExcludeNames = @(),
+        [int]$InterPacketGap = 0
+    )
+
+    if ($Direction -eq 'Restore') {
+        if (-not (Test-Path -LiteralPath $RemotePath)) {
+            Write-Log "Remote backup missing for '$Name'; skipping restore." -Level Warn
+            return
+        }
+        # First run after this engine ships: there is no index yet, but the
+        # legacy robocopy /MIR tree may exist. Fall back to a full robocopy.
+        if (-not (Test-Path -LiteralPath $IndexFile)) {
+            Write-Log "No index for '$Name' yet; falling back to full robocopy restore."
+            if (-not (Test-Path -LiteralPath $LocalPath)) {
+                New-Item -ItemType Directory -Path $LocalPath -Force | Out-Null
+            }
+            $args = @($RemotePath, $LocalPath, '/E', '/R:2', '/W:2', '/B', '/XJ', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+            & robocopy @args | Out-Null
+            if ($LASTEXITCODE -ge 8) {
+                throw "Robocopy fallback restore failed with exit code $LASTEXITCODE."
+            }
+            Write-Log "Restore (fallback) completed for '$Name'."
+            return
+        }
+
+        $index = Read-FileIndex $IndexFile
+        if ($index.Count -eq 0) {
+            Write-Log "Index empty for '$Name'; skipping restore."
+            return
+        }
+        if (-not (Test-Path -LiteralPath $LocalPath)) {
+            New-Item -ItemType Directory -Path $LocalPath -Force | Out-Null
+        }
+
+        $copied = 0
+        $skipped = 0
+        $i = 0
+        foreach ($rel in ($index.Keys | Sort-Object)) {
+            $i++
+            $src = Join-Path $RemotePath $rel
+            $dst = Join-Path $LocalPath $rel
+
+            $need = $true
+            if (Test-Path -LiteralPath $dst) {
+                $dstInfo = Get-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue
+                if ($dstInfo -and -not $dstInfo.PSIsContainer -and
+                    $dstInfo.Length -eq $index[$rel].size -and
+                    $dstInfo.LastWriteTimeUtc.Ticks -eq $index[$rel].mtimeTicks) {
+                    $need = $false
+                }
+            }
+            if ($need -and (Test-Path -LiteralPath $src)) {
+                if (Copy-FileRobust -Src $src -Dst $dst) {
+                    $copied++
+                }
+                else {
+                    Write-Log "Restore failed for '$rel'." -Level Warn
+                }
+            }
+            else {
+                $skipped++
+            }
+            if ($i % 500 -eq 0) {
+                Write-Log "Restore '$Name': $i/$($index.Count) files processed..."
+            }
+        }
+        Write-Log "Restore '$Name' done: $copied copied, $skipped skipped (of $($index.Count) indexed)."
+    }
+    else {
+        # Backup
+        if (-not (Test-Path -LiteralPath $LocalPath)) {
+            Write-Log "Local path missing for '$Name'; skipping backup." -Level Warn
+            return
+        }
+        if (-not (Test-Path -LiteralPath $RemotePath)) {
+            New-Item -ItemType Directory -Path $RemotePath -Force | Out-Null
+        }
+
+        Write-Log "Indexing local tree for '$Name'..."
+        $files = Get-TreeFiles -Root $LocalPath -ExcludeDirs $ExcludeDirs -ExcludeNames $ExcludeNames
+        Write-Log "Local files indexed for '$Name': $($files.Count)"
+
+        $oldIndex = @{}
+        if (Test-Path -LiteralPath $IndexFile) {
+            $oldIndex = Read-FileIndex $IndexFile
+        }
+
+        $changed = [System.Collections.Generic.List[string]]::new()
+        foreach ($f in $files) {
+            $cached = $null
+            if ($oldIndex.ContainsKey($f.Rel)) { $cached = $oldIndex[$f.Rel] }
+            if (-not $cached -or $cached.size -ne $f.Size -or $cached.mtimeTicks -ne $f.MtimeTicks) {
+                $changed.Add($f.Rel)
+            }
+        }
+        Write-Log "Files changed/new for '$Name': $($changed.Count)"
+
+        $copied = 0
+        $failed = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($rel in $changed) {
+            $src = Join-Path $LocalPath $rel
+            $dst = Join-Path $RemotePath $rel
+            if (Test-Path -LiteralPath $src) {
+                if (Copy-FileRobust -Src $src -Dst $dst -InterPacketGap $InterPacketGap) {
+                    $copied++
+                }
+                else {
+                    $failed.Add($rel) | Out-Null
+                }
+            }
+        }
+
+        # Write the fresh index. Files that failed to copy are deliberately NOT
+        # indexed so the next run retries them.
+        $newIndex = @{}
+        foreach ($f in $files) {
+            if (-not $failed.Contains($f.Rel)) {
+                $newIndex[$f.Rel] = @{ size = $f.Size; mtimeTicks = $f.MtimeTicks }
+            }
+        }
+        Write-FileIndex -Path $IndexFile -Index $newIndex
+
+        Write-Log "Backup '$Name' done: $copied copied, $($failed.Count) failed, $($newIndex.Count) indexed."
+        if ($failed.Count -gt 0) {
+            Write-Log "$($failed.Count) file(s) could not be copied for '$Name' (will retry next run)." -Level Warn
+        }
+    }
+}
+
+function Sync-ConfiguredPaths {
+    param(
+        $Config,
+        [string]$BackupRoot,
+        [ValidateSet('Restore', 'Backup')]
+        [string]$Direction,
+        [int]$InterPacketGap,
+        [int]$RestoreIpg
+    )
+
+    $ipg = if ($Direction -eq 'Restore') { $RestoreIpg } else { $InterPacketGap }
+
+    foreach ($entry in $Config.syncPaths.PSObject.Properties) {
+        $paths = $entry.Value
+        $excludeDirs = @()
+        if ($paths.PSObject.Properties['excludeDirs']) {
+            $excludeDirs = @($paths.excludeDirs)
+        }
+        $excludeNames = @()
+        if ($paths.PSObject.Properties['excludeNames']) {
+            $excludeNames = @($paths.excludeNames)
+        }
+        $isIndexed = $false
+        if ($paths.PSObject.Properties['indexed'] -and $paths.indexed) {
+            $isIndexed = $true
+        }
+
+        $local = Expand-ConfigPath $paths.local
+        $remote = Expand-ConfigPath $paths.remote
+
+        if ($isIndexed) {
+            $indexFile = Join-Path (Join-Path $BackupRoot 'index') ($entry.Name + '.json')
+            try {
+                Sync-IndexedDirectory -Name $entry.Name -LocalPath $local -RemotePath $remote `
+                    -IndexFile $indexFile -Direction $Direction -ExcludeDirs $excludeDirs `
+                    -ExcludeNames $excludeNames -InterPacketGap $ipg
+            }
+            catch {
+                Write-Log "Indexed sync failed for '$($entry.Name)': $_" -Level Warn
+            }
+        }
+        else {
+            Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $excludeDirs }) `
+                               -Direction $Direction -InterPacketGap $ipg
+        }
+    }
+}
+
 try {
     Write-Log "persistent-state.ps1 starting (Action=$Action)..."
     $config = Get-Config
@@ -392,17 +721,7 @@ try {
         }
         else {
             # Restore configured sync paths, then deep-scanned items.
-            foreach ($entry in $config.syncPaths.PSObject.Properties) {
-                $paths = $entry.Value
-                # excludeDirs is optional per sync path; access it safely so
-                # StrictMode does not throw for entries without the property.
-                $excludeDirs = @()
-                if ($paths.PSObject.Properties['excludeDirs']) {
-                    $excludeDirs = @($paths.excludeDirs)
-                }
-                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $excludeDirs }) `
-                                   -Direction 'Restore' -InterPacketGap $restoreIpg
-            }
+            Sync-ConfiguredPaths -Config $config -BackupRoot $backupRoot -Direction 'Restore' -InterPacketGap $ipg -RestoreIpg $restoreIpg
 
             if ($config.deepScan.enabled) {
                 foreach ($item in (Invoke-DeepScanDiscovery $config.deepScan)) {
@@ -448,17 +767,7 @@ try {
         }
         else {
             if (-not (Test-Path $backupRoot)) { New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null }
-            foreach ($entry in $config.syncPaths.PSObject.Properties) {
-                $paths = $entry.Value
-                # excludeDirs is optional per sync path; access it safely so
-                # StrictMode does not throw for entries without the property.
-                $excludeDirs = @()
-                if ($paths.PSObject.Properties['excludeDirs']) {
-                    $excludeDirs = @($paths.excludeDirs)
-                }
-                Sync-SyncPathEntry -Entry ([pscustomobject]@{ Name = $entry.Name; local = $paths.local; remote = $paths.remote; excludeDirs = $excludeDirs }) `
-                                   -Direction 'Backup' -InterPacketGap $ipg
-            }
+            Sync-ConfiguredPaths -Config $config -BackupRoot $backupRoot -Direction 'Backup' -InterPacketGap $ipg -RestoreIpg $restoreIpg
 
             if ($config.deepScan.enabled) {
                 foreach ($item in (Invoke-DeepScanDiscovery $config.deepScan)) {
