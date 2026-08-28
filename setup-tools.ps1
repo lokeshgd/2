@@ -289,16 +289,18 @@ function Find-AntigravityBinary {
         (Join-Path $env:ProgramFiles 'Antigravity IDE\Antigravity.exe'),
         (Join-Path $env:ProgramFiles 'Google\Antigravity\Antigravity.exe'),
         (Join-Path $env:LocalAppData 'Programs\Antigravity\Antigravity.exe'),
+        (Join-Path $env:LocalAppData 'Programs\Antigravity IDE\Antigravity.exe'),
         (Join-Path $env:LocalAppData 'Antigravity\Antigravity.exe')
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) { return $c }
     }
-    # Bounded recursive search (Program Files + per-user Programs) in case the
-    # app installs under a variant of the Antigravity directory name.
-    foreach ($base in @($env:ProgramFiles, (Join-Path $env:LocalAppData 'Programs'))) {
-        if (-not $base -or -not (Test-Path $base)) { continue }
-        $hit = Get-ChildItem -LiteralPath $base -Filter 'Antigravity.exe' -Recurse -File -Depth 3 -ErrorAction SilentlyContinue |
+    # Broad recursive search. The exact install dir/exe name is not known for
+    # every Antigravity build, so look anywhere plausible for Antigravity*.exe.
+    $pf86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    foreach ($base in @($env:ProgramFiles, $pf86, $env:LocalAppData, $env:AppData, $env:ProgramData)) {
+        if (-not $base -or -not (Test-Path -LiteralPath $base)) { continue }
+        $hit = Get-ChildItem -LiteralPath $base -Filter 'Antigravity*.exe' -Recurse -File -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($hit) { return $hit.FullName }
     }
@@ -322,25 +324,39 @@ function Install-Antigravity {
         }
 
         # This is an Inno Setup 6.x installer, so NSIS-style flags (/S) must
-        # NOT be used — they make it hang. Use the Inno silent set instead.
-        # /ALLUSERS puts the IDE in Program Files so it is visible to every
-        # user, including the interactive RDP/AnyDesk user (Bullettemporary).
-        Write-Log "Installing Antigravity IDE silently (blocking, Inno /VERYSILENT)..."
-        $proc = Start-Process -FilePath $installer `
-            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/ALLUSERS' -PassThru
-        if (-not $proc.WaitForExit(360000)) {
-            Write-Log 'Antigravity installer did not exit within 6 minutes.' -Level Warn
-        }
+        # NOT be used — they make it hang. Use the Inno silent set. Try
+        # all-users first, then per-user as a fallback.
+        $flagSets = @(
+            @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/ALLUSERS'),
+            @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-')
+        )
 
-        $deadline = (Get-Date).AddSeconds(60)
-        $found = ''
-        while (-not $found -and (Get-Date) -lt $deadline) {
-            $found = Find-AntigravityBinary -ToolConfig $ToolConfig
-            if (-not $found) { Start-Sleep -Seconds 5 }
+        foreach ($flags in $flagSets) {
+            if ($found) { break }
+            Write-Log "Installing Antigravity IDE silently (blocking, Inno flags: $($flags -join ' '))..."
+            $proc = Start-Process -FilePath $installer -ArgumentList $flags -PassThru
+            $null = $proc.WaitForExit(360000)
+
+            # The launched process can spawn an elevated/child installer; wait
+            # for all Antigravity installer processes to actually go away before
+            # looking for the binary.
+            $pDeadline = (Get-Date).AddSeconds(120)
+            while ((Get-Date) -lt $pDeadline) {
+                $running = @(Get-Process -Name 'Antigravity-IDE-Installer*' -ErrorAction SilentlyContinue)
+                if ($running.Count -eq 0) { break }
+                Start-Sleep -Seconds 5
+            }
+
+            # Poll for the binary with a generous window.
+            $bDeadline = (Get-Date).AddSeconds(180)
+            while (-not $found -and (Get-Date) -lt $bDeadline) {
+                $found = Find-AntigravityBinary -ToolConfig $ToolConfig
+                if (-not $found) { Start-Sleep -Seconds 5 }
+            }
         }
 
         if (-not $found) {
-            throw 'Antigravity binary not found after install (searched Program Files and per-user Programs).'
+            throw 'Antigravity binary not found after install (all-users and per-user attempts).'
         }
         Write-Log "Antigravity IDE installed successfully at $found"
     }
