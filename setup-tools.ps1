@@ -285,12 +285,12 @@ function Find-AntigravityBinary {
     param($ToolConfig)
     $candidates = @(
         (Expand-ConfigPath $ToolConfig.binary),
+        (Join-Path $env:LocalAppData 'Programs\Antigravity IDE\Antigravity IDE.exe'),
+        (Join-Path $env:LocalAppData 'Programs\Antigravity\Antigravity.exe'),
+        (Join-Path $env:LocalAppData 'Antigravity\Antigravity.exe'),
         (Join-Path $env:ProgramFiles 'Antigravity\Antigravity.exe'),
         (Join-Path $env:ProgramFiles 'Antigravity IDE\Antigravity.exe'),
-        (Join-Path $env:ProgramFiles 'Google\Antigravity\Antigravity.exe'),
-        (Join-Path $env:LocalAppData 'Programs\Antigravity\Antigravity.exe'),
-        (Join-Path $env:LocalAppData 'Programs\Antigravity IDE\Antigravity.exe'),
-        (Join-Path $env:LocalAppData 'Antigravity\Antigravity.exe')
+        (Join-Path $env:ProgramFiles 'Google\Antigravity\Antigravity.exe')
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) { return $c }
@@ -359,6 +359,28 @@ function Install-Antigravity {
             throw 'Antigravity binary not found after install (all-users and per-user attempts).'
         }
         Write-Log "Antigravity IDE installed successfully at $found"
+
+        # The IDE installs per-user (into the runner's LocalAppData), so it
+        # would not show up for the interactive RDP/AnyDesk user
+        # (Bullettemporary). Drop a machine-wide Start Menu shortcut so every
+        # user can find and launch it.
+        try {
+            $startMenuDir = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+            if (-not (Test-Path -LiteralPath $startMenuDir)) {
+                New-Item -ItemType Directory -Path $startMenuDir -Force | Out-Null
+            }
+            $shortcutPath = Join-Path $startMenuDir 'Antigravity IDE.lnk'
+            $ws = New-Object -ComObject WScript.Shell
+            $sc = $ws.CreateShortcut($shortcutPath)
+            $sc.TargetPath = $found
+            $sc.WorkingDirectory = Split-Path -Path $found -Parent
+            $sc.Description = 'Google Antigravity IDE'
+            $sc.Save()
+            Write-Log "Created machine-wide Start Menu shortcut: $shortcutPath"
+        }
+        catch {
+            Write-Log "Failed to create Antigravity Start Menu shortcut: $_" -Level Warn
+        }
     }
     catch {
         Write-Log "Antigravity install failed: $_" -Level Warn
