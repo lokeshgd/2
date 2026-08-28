@@ -281,20 +281,37 @@ function Install-WinFsp {
     }
 }
 
+function Find-AntigravityBinary {
+    param($ToolConfig)
+    $candidates = @(
+        (Expand-ConfigPath $ToolConfig.binary),
+        (Join-Path $env:ProgramFiles 'Antigravity\Antigravity.exe'),
+        (Join-Path $env:ProgramFiles 'Antigravity IDE\Antigravity.exe'),
+        (Join-Path $env:ProgramFiles 'Google\Antigravity\Antigravity.exe'),
+        (Join-Path $env:LocalAppData 'Programs\Antigravity\Antigravity.exe'),
+        (Join-Path $env:LocalAppData 'Antigravity\Antigravity.exe')
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { return $c }
+    }
+    # Bounded recursive search (Program Files + per-user Programs) in case the
+    # app installs under a variant of the Antigravity directory name.
+    foreach ($base in @($env:ProgramFiles, (Join-Path $env:LocalAppData 'Programs'))) {
+        if (-not $base -or -not (Test-Path $base)) { continue }
+        $hit = Get-ChildItem -LiteralPath $base -Filter 'Antigravity.exe' -Recurse -File -Depth 3 -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    }
+    return ''
+}
+
 function Install-Antigravity {
     param($ToolConfig)
     try {
-        $binary = Expand-ConfigPath $ToolConfig.binary
-        # With /allusers the IDE goes to Program Files, not the runner's LocalAppData.
-        $systemBinary = Join-Path $env:ProgramFiles 'Antigravity\Antigravity.exe'
-        $altBinary = Join-Path $env:LocalAppData 'Antigravity\Antigravity.exe'
-        $candidates = @($binary, $systemBinary, $altBinary)
-
-        foreach ($c in $candidates) {
-            if (Test-Path $c) {
-                Write-Log "Antigravity IDE already installed at $c"
-                return
-            }
+        $found = Find-AntigravityBinary -ToolConfig $ToolConfig
+        if ($found) {
+            Write-Log "Antigravity IDE already installed at $found"
+            return
         }
 
         Write-Log "Downloading Antigravity IDE from $($ToolConfig.downloadUrl)..."
@@ -304,26 +321,26 @@ function Install-Antigravity {
             throw 'Antigravity installer download produced no file.'
         }
 
-        # Blocking install: wait for the installer process AND then for the
-        # binary to appear, so the IDE is guaranteed present for the interactive
-        # RDP/AnyDesk user instead of being orphaned when the step moves on.
-        Write-Log "Installing Antigravity IDE silently (blocking)..."
-        $proc = Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' -PassThru
-        if (-not $proc.WaitForExit(240000)) {
-            Write-Log 'Antigravity installer did not exit within 4 minutes.' -Level Warn
+        # This is an Inno Setup 6.x installer, so NSIS-style flags (/S) must
+        # NOT be used — they make it hang. Use the Inno silent set instead.
+        # /ALLUSERS puts the IDE in Program Files so it is visible to every
+        # user, including the interactive RDP/AnyDesk user (Bullettemporary).
+        Write-Log "Installing Antigravity IDE silently (blocking, Inno /VERYSILENT)..."
+        $proc = Start-Process -FilePath $installer `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/ALLUSERS' -PassThru
+        if (-not $proc.WaitForExit(360000)) {
+            Write-Log 'Antigravity installer did not exit within 6 minutes.' -Level Warn
         }
 
-        $found = ''
         $deadline = (Get-Date).AddSeconds(60)
+        $found = ''
         while (-not $found -and (Get-Date) -lt $deadline) {
-            foreach ($c in $candidates) {
-                if (Test-Path $c) { $found = $c; break }
-            }
+            $found = Find-AntigravityBinary -ToolConfig $ToolConfig
             if (-not $found) { Start-Sleep -Seconds 5 }
         }
 
         if (-not $found) {
-            throw "Antigravity binary not found after install (checked: $($candidates -join ', '))."
+            throw 'Antigravity binary not found after install (searched Program Files and per-user Programs).'
         }
         Write-Log "Antigravity IDE installed successfully at $found"
     }
