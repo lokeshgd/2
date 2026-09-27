@@ -66,7 +66,7 @@ jobs:
           $runtime = ToIntOr $env:RAW_RUNTIME 300
           if ($isTest) { $runtime = 5 }
 
-          # Floor: default ~5h (300) leaves headroom for the slow end-of-run
+          # Floor: default ~5h (300) leaves headroom for the end-of-run backup
           # inside the 360-min job timeout. Absolute cap stays 350.
           if (-not $isTest -and $runtime -lt 6) { $runtime = 300 }
           if ($runtime -gt 350) { $runtime = 350 }
@@ -81,6 +81,17 @@ jobs:
           "runtime=$runtime" | Out-File -Append $env:GITHUB_OUTPUT
           "loops=$loops" | Out-File -Append $env:GITHUB_OUTPUT
           Write-Host "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup tools (python, astro, wrangler, opencode)
+        run: ./setup-tools.ps1
+
+      - name: Create project folder + initial backup
+        run: ./sync-projects.ps1
+        env:
+          GH_TOKEN: ${{ steps.cfg.outputs.pat }}
 
       - name: Install Tailscale (if missing) and show version
         run: |
@@ -150,15 +161,28 @@ jobs:
 
           "### RDP (A)`nHost: $env:TS_HOSTNAME`nIPv4: $ip4`nMagicDNS: $fqdn`nDERP: $derp`nUser: $env:RDP_USER`nPass: $env:RDP_PASS" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-      - name: Keep alive
+      - name: Keep alive (backup every 30 min)
+        env:
+          GH_TOKEN: ${{ steps.cfg.outputs.pat }}
         run: |
           $mins=[int]"${{ steps.cfg.outputs.runtime }}"
           $end=(Get-Date).AddMinutes($mins)
+          $nextBackup=(Get-Date).AddMinutes(30)
           while((Get-Date) -lt $end){
+            if ((Get-Date) -ge $nextBackup) {
+              try { & .\sync-projects.ps1 } catch { Write-Warning "Periodic backup failed: $_" }
+              $nextBackup=(Get-Date).AddMinutes(30)
+            }
             $left=[int]([math]::Ceiling(($end-(Get-Date)).TotalMinutes))
             Write-Host "RDP alive... ($left min left)"
             Start-Sleep -Seconds 60
           }
+
+      - name: Final project backup
+        if: always()
+        run: ./sync-projects.ps1
+        env:
+          GH_TOKEN: ${{ steps.cfg.outputs.pat }}
 
       - name: Purge tailnet devices matching hostname (exit)
         if: always()
