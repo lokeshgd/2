@@ -8,7 +8,7 @@ on:
         type: boolean
         default: false
       runtime_minutes:
-        description: "Runtime in minutes (default 300 so end-of-run backup fits in the 360-min job timeout; capped to 350)"
+        description: "Runtime in minutes (default 300 so end-of-run fits in the 360-min job timeout; capped to 350)"
         required: false
         default: "300"
       loops:
@@ -67,7 +67,7 @@ jobs:
           if ($isTest) { $runtime = 5 }
 
           # Floor: default ~5h (300) leaves headroom for the slow end-of-run
-          # backup inside the 360-min job timeout. Absolute cap stays 350.
+          # inside the 360-min job timeout. Absolute cap stays 350.
           if (-not $isTest -and $runtime -lt 6) { $runtime = 300 }
           if ($runtime -gt 350) { $runtime = 350 }
 
@@ -81,30 +81,6 @@ jobs:
           "runtime=$runtime" | Out-File -Append $env:GITHUB_OUTPUT
           "loops=$loops" | Out-File -Append $env:GITHUB_OUTPUT
           Write-Host "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup tools
-        run: ./setup-tools.ps1 -SkipAnyDesk
-
-      - name: Mount pCloud
-        run: ./rclone-auth.ps1
-        env:
-          PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
-
-      - name: Restore persistent state
-        id: restore
-        timeout-minutes: 60
-        run: ./persistent-state.ps1 -Action Restore
-        env:
-          PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
-          GH_TOKEN: ${{ steps.cfg.outputs.pat }}
-
-      - name: Setup AnyDesk (reuse machine ID after restore)
-        run: ./setup-anydesk.ps1
-        env:
-          PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
 
       - name: Install Tailscale (if missing) and show version
         run: |
@@ -135,11 +111,6 @@ jobs:
           }
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
-
-      - name: Mount pCloud for interactive sessions (RDP/AnyDesk)
-        run: ./setup-pcloud-interactive.ps1
-        env:
-          PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
 
       - name: Purge tailnet devices matching hostname (startup)
         run: |
@@ -179,28 +150,15 @@ jobs:
 
           "### RDP (A)`nHost: $env:TS_HOSTNAME`nIPv4: $ip4`nMagicDNS: $fqdn`nDERP: $derp`nUser: $env:RDP_USER`nPass: $env:RDP_PASS" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-      - name: Optimize performance (High priority RDP/Tailscale/AnyDesk)
-        run: ./optimize.ps1
-
       - name: Keep alive
         run: |
           $mins=[int]"${{ steps.cfg.outputs.runtime }}"
           $end=(Get-Date).AddMinutes($mins)
           while((Get-Date) -lt $end){
-            # Re-apply high priority in case a process restarted mid-session.
-            try { & .\optimize.ps1 *> $null } catch {}
             $left=[int]([math]::Ceiling(($end-(Get-Date)).TotalMinutes))
             Write-Host "RDP alive... ($left min left)"
             Start-Sleep -Seconds 60
           }
-
-      - name: Backup persistent state
-        if: always() && steps.restore.outcome == 'success'
-        timeout-minutes: 60
-        run: ./persistent-state.ps1 -Action Backup
-        env:
-          PCLOUD_CONFIG: ${{ secrets.PCLOUD_CONFIG }}
-          GH_TOKEN: ${{ steps.cfg.outputs.pat }}
 
       - name: Purge tailnet devices matching hostname (exit)
         if: always()
