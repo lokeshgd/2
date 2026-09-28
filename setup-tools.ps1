@@ -105,6 +105,20 @@ try {
         Write-Log "Project folder already exists: $projects"
     }
 
+    # A small marker so the first git backup has something to push. Without it
+    # the folder starts empty and the very first backup reports "no changes".
+    $marker = Join-Path $projects 'README.md'
+    if (-not (Test-Path $marker)) {
+        @(
+            '# RDP_Projects'
+            ''
+            'Files placed in this folder are backed up to the private'
+            '`lokeshgd/Data` repository every ~30 minutes and before each'
+            'RDP session shuts down.'
+        ) -join "`n" | Set-Content -Path $marker -Encoding utf8
+        Write-Log "Created backup marker: $marker"
+    }
+
     Write-Log 'setup-tools.ps1 completed.'
     $LASTEXITCODE = 0
     exit 0
