@@ -64,7 +64,7 @@ function Initialize-LocalClone {
 try {
     Write-Log 'sync-projects.ps1 starting...'
 
-    $token = $env:GH_TOKEN
+    $token = "$env:GH_TOKEN".Trim()
     if ([string]::IsNullOrWhiteSpace($token)) {
         Write-Log 'GH_TOKEN missing; skipping backup.' -Level Warn
         $LASTEXITCODE = 0

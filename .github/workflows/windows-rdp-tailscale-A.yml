@@ -54,7 +54,7 @@ jobs:
           $tailnet = $env:RAW_TAILNET
           $apiKey  = $env:RAW_APIKEY
           $authKey = $env:RAW_AUTHKEY
-          $pat     = $env:RAW_PAT
+          $pat     = "$env:RAW_PAT".Trim()
           if (-not $tailnet -or -not $apiKey -or -not $authKey -or -not $pat) {
             Write-Error "Missing configuration. Set repository secrets TS_TAILNET, TS_API_KEY, TS_AUTHKEY and GH_API_TOKEN."
             exit 1
