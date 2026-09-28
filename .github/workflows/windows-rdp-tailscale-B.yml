@@ -45,7 +45,7 @@ jobs:
           RAW_APIKEY:  ${{ secrets.TS_API_KEY }}
           RAW_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
           RAW_PAT:     ${{ secrets.GH_API_TOKEN }}
-          RAW_TEST:    ${{ inputs.test_mode == true && 'true' || 'false' }}
+          RAW_TEST:    ${{ inputs.test_mode }}
           RAW_RUNTIME: ${{ inputs.runtime_minutes || '300' }}
           RAW_LOOPS:   ${{ inputs.loops || '0' }}
         run: |
@@ -219,7 +219,7 @@ jobs:
           $body=@{
             ref    = "${{ github.ref_name }}"
             inputs = @{
-              test_mode       = $false
+              test_mode       = "false"
               runtime_minutes = "${{ steps.cfg.outputs.runtime }}"
               loops           = "$next"
             }
