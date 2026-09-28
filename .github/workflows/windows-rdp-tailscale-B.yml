@@ -86,9 +86,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup tools (python, astro, wrangler, opencode)
+        continue-on-error: true
         run: ./setup-tools.ps1
 
       - name: Create project folder + initial backup
+        continue-on-error: true
         run: ./sync-projects.ps1
         env:
           GH_TOKEN: ${{ steps.cfg.outputs.pat }}
@@ -206,13 +208,14 @@ jobs:
 
       - name: Dispatch workflow A (instant, forever by default)
         if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $loops=[int]"${{ steps.cfg.outputs.loops }}"
           if ($loops -eq 1) { Write-Host "Loops finished; not dispatching."; exit 0 }
           if ($loops -gt 1) { $next=$loops-1 } else { $next=0 }
 
-          $token="${{ steps.cfg.outputs.pat }}"
           $body=@{
             ref    = "${{ github.ref_name }}"
             inputs = @{
@@ -222,15 +225,23 @@ jobs:
             }
           } | ConvertTo-Json -Depth 5
 
-          try {
-            Invoke-RestMethod -Method POST `
-              -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/windows-rdp-tailscale-A.yml/dispatches" `
-              -Headers @{ Authorization = "Bearer $token"; "Accept"="application/vnd.github+json" } `
-              -ContentType "application/json" `
-              -Body $body | Out-Null
-            Write-Host "Dispatched workflow A (loops=$next)."
+          # Try the PAT first, then fall back to the built-in GITHUB_TOKEN
+          # (which can trigger workflow_dispatch when actions: write is granted).
+          $tokens = @("${{ steps.cfg.outputs.pat }}", $env:GITHUB_TOKEN) | Where-Object { $_ -and "$_".Trim() -ne '' }
+          $ok = $false
+          foreach ($t in $tokens) {
+            try {
+              Invoke-RestMethod -Method POST `
+                -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/windows-rdp-tailscale-A.yml/dispatches" `
+                -Headers @{ Authorization = "Bearer $t"; "Accept"="application/vnd.github+json" } `
+                -ContentType "application/json" `
+                -Body $body | Out-Null
+              Write-Host "Dispatched workflow A (loops=$next)."
+              $ok = $true
+              break
+            }
+            catch {
+              Write-Warning "Dispatch attempt failed: $_"
+            }
           }
-          catch {
-            Write-Error "Dispatch of workflow A failed: $_"
-            exit 1
-          }
+          if (-not $ok) { Write-Error "Dispatch of workflow A failed with all available tokens."; exit 1 }

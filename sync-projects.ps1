@@ -116,7 +116,13 @@ try {
     exit 0
 }
 catch {
-    Write-Log "sync-projects.ps1 fatal error: $_" -Level Error
-    $LASTEXITCODE = 1
-    exit 1
+    $err = "$_"
+    Write-Log "sync-projects.ps1 error: $err" -Level Warn
+    if ($err -match '401|403|Bad credentials|Resource not accessible') {
+        Write-Log 'GH_API_TOKEN is invalid/expired or lacks permission (needs repo + workflow scope). Backup skipped.' -Level Warn
+    }
+    # Backup is best-effort: never fail the job because of it, otherwise the
+    # RDP setup and keep-alive steps that follow would be skipped.
+    $LASTEXITCODE = 0
+    exit 0
 }
