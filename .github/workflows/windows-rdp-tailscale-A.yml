@@ -85,6 +85,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: "Prune old workflow runs (test: keep 2)"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.cfg.outputs.pat }}
+        run: ./prune-runs.ps1 -Keep 2
+
       - name: Setup tools (python, astro, wrangler, opencode)
         continue-on-error: true
         run: ./setup-tools.ps1
